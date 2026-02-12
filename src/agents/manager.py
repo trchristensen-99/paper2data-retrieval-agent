@@ -11,6 +11,10 @@ from src.agents.data_availability import (
     run_data_availability_agent,
 )
 from src.agents.metadata import metadata_agent, run_metadata_agent
+from src.agents.metadata_enrichment import (
+    metadata_enrichment_agent,
+    run_metadata_enrichment_agent,
+)
 from src.agents.methods import methods_agent, run_methods_agent
 from src.agents.quality_control import quality_control_agent, run_quality_control_agent
 from src.agents.results import results_agent, run_results_agent
@@ -33,6 +37,7 @@ manager_agent = Agent(
         results_agent,
         data_availability_agent,
         quality_control_agent,
+        metadata_enrichment_agent,
         synthesis_agent,
     ],
 )
@@ -120,6 +125,26 @@ async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
                 data_availability = await run_data_availability_agent(paper_markdown, guidance=reason)
             log_event("pipeline.quality_retry.step", {"agent": agent_name, "reason": reason})
         log_event("pipeline.quality_retry.end", {"notes": quality_check.notes})
+
+    if not metadata.doi or not metadata.pmid:
+        step_start = perf_counter()
+        enrichment = await run_metadata_enrichment_agent(metadata, paper_markdown)
+        step_timings_seconds["metadata_enrichment"] = perf_counter() - step_start
+        log_event(
+            "pipeline.step_timing",
+            {"step": "metadata_enrichment", "seconds": step_timings_seconds["metadata_enrichment"]},
+        )
+        _print_step_timing("metadata_enrichment", step_timings_seconds["metadata_enrichment"])
+
+        if not metadata.doi and enrichment.doi:
+            metadata.doi = enrichment.doi
+        if not metadata.pmid and enrichment.pmid:
+            metadata.pmid = enrichment.pmid
+        if not metadata.journal and enrichment.journal:
+            metadata.journal = enrichment.journal
+        if not metadata.publication_date and enrichment.publication_date:
+            metadata.publication_date = enrichment.publication_date
+        log_event("pipeline.metadata_enrichment.applied", {"notes": enrichment.notes})
 
     synthesis_input = SynthesisInput(
         metadata=metadata,

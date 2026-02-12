@@ -16,8 +16,7 @@ def _extract_file_candidates(text: str) -> list[str]:
     return sorted(set(candidates))
 
 
-@function_tool
-async def check_geo_accession(accession: str) -> dict:
+async def check_geo_accession_request(accession: str) -> dict:
     """Verify a GEO accession and return a lightweight summary from NCBI E-utilities."""
     result: dict[str, Any] = {
         "accession": accession,
@@ -70,8 +69,7 @@ async def check_geo_accession(accession: str) -> dict:
     return result
 
 
-@function_tool
-async def check_sra_accession(accession: str) -> dict:
+async def check_sra_accession_request(accession: str) -> dict:
     """Verify an SRA accession using NCBI E-utilities and return lightweight metadata."""
     result: dict[str, Any] = {
         "accession": accession,
@@ -119,3 +117,13 @@ async def check_sra_accession(accession: str) -> dict:
 
     log_event("tool.check_sra_accession", {**result})
     return result
+
+
+@function_tool
+async def check_geo_accession(accession: str) -> dict:
+    return await check_geo_accession_request(accession)
+
+
+@function_tool
+async def check_sra_accession(accession: str) -> dict:
+    return await check_sra_accession_request(accession)

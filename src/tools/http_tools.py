@@ -6,8 +6,7 @@ from agents import function_tool
 from src.utils.logging import log_event
 
 
-@function_tool
-async def check_url(url: str) -> dict:
+async def check_url_request(url: str) -> dict:
     """Check whether an HTTP URL is reachable via HEAD (fallback to GET)."""
     result: dict[str, object] = {
         "url": url,
@@ -27,3 +26,8 @@ async def check_url(url: str) -> dict:
 
     log_event("tool.check_url", result)
     return result
+
+
+@function_tool
+async def check_url(url: str) -> dict:
+    return await check_url_request(url)

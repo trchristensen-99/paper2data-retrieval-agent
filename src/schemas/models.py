@@ -35,6 +35,9 @@ class DataAccession(BaseModel):
     is_accessible: Optional[bool] = None
     file_count: Optional[int] = None
     files_listed: Optional[list[str]] = None
+    total_size_bytes: Optional[int] = None
+    estimated_download_seconds: Optional[float] = None
+    download_probe_url: Optional[str] = None
 
 
 class DataAvailabilityReport(BaseModel):
@@ -116,4 +119,12 @@ class QualityCheckOutput(BaseModel):
     suspicious_empty_fields: list[str]
     should_retry: bool
     retry_instructions: list[RetryInstruction] = []
+    notes: str
+
+
+class MetadataEnrichmentOutput(BaseModel):
+    doi: Optional[str] = None
+    pmid: Optional[str] = None
+    journal: Optional[str] = None
+    publication_date: Optional[str] = None
     notes: str

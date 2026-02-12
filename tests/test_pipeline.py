@@ -125,6 +125,16 @@ async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) 
             retrieval_log_markdown="# Retrieval Log",
         )
 
+    class _Enrich:
+        doi = None
+        pmid = None
+        journal = None
+        publication_date = None
+        notes = "No enrichment needed"
+
+    async def _enrichment(*args, **kwargs):
+        return _Enrich()
+
     class _QC:
         should_retry = False
         retry_instructions = []
@@ -140,6 +150,7 @@ async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(manager, "run_results_agent", _results)
     monkeypatch.setattr(manager, "run_data_availability_agent", _data)
     monkeypatch.setattr(manager, "run_quality_control_agent", _quality)
+    monkeypatch.setattr(manager, "run_metadata_enrichment_agent", _enrichment)
     monkeypatch.setattr(manager, "run_synthesis_agent", _synthesis)
 
     artifacts = await manager.run_pipeline("paper body")
