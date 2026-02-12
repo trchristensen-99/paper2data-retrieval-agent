@@ -41,6 +41,14 @@ HTML_PAGE = """<!doctype html>
     tr:hover { background: #f7fbfd; cursor: pointer; }
     .split { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; }
     pre { white-space: pre-wrap; word-break: break-word; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 0; max-height: 560px; overflow: auto; }
+    .detail-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; min-height: 560px; }
+    .detail-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+    .detail-tab { background: #eef5f8; color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
+    .detail-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .detail-tools { display: grid; grid-template-columns: 1fr; margin-bottom: 8px; }
+    .detail-table { width: 100%; border-collapse: collapse; }
+    .detail-table th, .detail-table td { border-bottom: 1px solid #eef2f6; text-align: left; vertical-align: top; padding: 6px; }
+    .detail-table th { width: 36%; color: #435366; }
     .muted { color: #5a6778; font-size: 12px; margin: 6px 0 12px; }
     @media (max-width: 900px) {
     .grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
@@ -82,7 +90,7 @@ HTML_PAGE = """<!doctype html>
         </thead>
         <tbody id=\"rows\"></tbody>
       </table>
-      <pre id=\"detail\">Select a paper to view full structured JSON.</pre>
+      <div id=\"detail\" class=\"detail-panel\">Select a paper to view structured details.</div>
     </div>
     <div class=\"muted\" id=\"status_msg\"></div>
   </div>
@@ -90,6 +98,9 @@ HTML_PAGE = """<!doctype html>
     let sortBy = 'updated_at';
     let sortDir = 'desc';
     let fieldSubfields = {};
+    let detailTab = 'overview';
+    let detailFilter = '';
+    let currentRecord = null;
 
     function fillOptions(id, items, placeholder) {
       const el = document.getElementById(id);
@@ -115,6 +126,160 @@ HTML_PAGE = """<!doctype html>
       fillOptions('subfield', list, 'All subfields');
       if (list.some(x => x.name === selected)) {
         document.getElementById('subfield').value = selected;
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('\"', '&quot;')
+        .replaceAll(\"'\", '&#39;');
+    }
+
+    function valueToText(value) {
+      if (value === null || value === undefined) return '';
+      if (Array.isArray(value)) return value.map(v => valueToText(v)).filter(Boolean).join('; ');
+      if (typeof value === 'object') return JSON.stringify(value);
+      return String(value);
+    }
+
+    function buildDetailRows(record) {
+      const metadata = record.metadata || {};
+      const methods = record.methods || {};
+      const results = record.results || {};
+      const dataAvailability = record.data_availability || {};
+      const accessions = Array.isArray(record.data_accessions) ? record.data_accessions : [];
+      const quant = Array.isArray(results.quantitative_findings) ? results.quantitative_findings : [];
+
+      return {
+        overview: [
+          ['Title', metadata.title || ''],
+          ['Authors', valueToText(metadata.authors || [])],
+          ['Journal/Venue', metadata.journal || ''],
+          ['Publication Date', metadata.publication_date || ''],
+          ['DOI', metadata.doi || ''],
+          ['PMID', metadata.pmid || ''],
+          ['Field', metadata.category || ''],
+          ['Subfield', metadata.subcategory || ''],
+          ['Confidence', Number(record.extraction_confidence || 0).toFixed(2)],
+        ],
+        metadata: [
+          ['Keywords', valueToText(metadata.keywords || [])],
+          ['Funding Sources', valueToText(metadata.funding_sources || [])],
+          ['Conflicts of Interest', metadata.conflicts_of_interest || ''],
+        ],
+        methods: [
+          ['Organisms', valueToText(methods.organisms || [])],
+          ['Cell Types', valueToText(methods.cell_types || [])],
+          ['Assay Types', valueToText(methods.assay_types || [])],
+          ['Sample Sizes', valueToText(methods.sample_sizes || {})],
+          ['Statistical Tests', valueToText(methods.statistical_tests || [])],
+          ['Experimental Design', methods.experimental_design || ''],
+          ['Methods Completeness', methods.methods_completeness || ''],
+        ],
+        results: [
+          ['Spin Assessment', results.spin_assessment || ''],
+          ['Qualitative Findings', valueToText(results.qualitative_findings || [])],
+          ['Quantitative Findings Count', quant.length],
+          ...quant.map((f, i) => [
+            `Finding ${i + 1}`,
+            valueToText([
+              f.claim ? `claim=${f.claim}` : '',
+              f.metric ? `metric=${f.metric}` : '',
+              f.value ? `value=${f.value}` : '',
+              f.effect_size ? `effect_size=${f.effect_size}` : '',
+              f.confidence_interval ? `ci=${f.confidence_interval}` : '',
+              f.p_value ? `p=${f.p_value}` : '',
+              f.context ? `context=${f.context}` : '',
+              f.confidence !== undefined ? `confidence=${f.confidence}` : '',
+            ].filter(Boolean))
+          ]),
+        ],
+        data: [
+          ['Availability Status', dataAvailability.overall_status || ''],
+          ['Claimed Repositories', valueToText(dataAvailability.claimed_repositories || [])],
+          ['Verified Repositories', valueToText(dataAvailability.verified_repositories || [])],
+          ['Discrepancies', valueToText(dataAvailability.discrepancies || [])],
+          ['Data Availability Notes', dataAvailability.notes || ''],
+          ['Code Repositories', valueToText(record.code_repositories || [])],
+          ['Data Accessions Count', accessions.length],
+          ...accessions.map((a, i) => [
+            `Accession ${i + 1}`,
+            valueToText([
+              a.repository ? `repo=${a.repository}` : '',
+              a.accession_id ? `id=${a.accession_id}` : '',
+              a.url ? `url=${a.url}` : '',
+              a.file_count !== undefined && a.file_count !== null ? `files=${a.file_count}` : '',
+              a.is_accessible !== undefined && a.is_accessible !== null ? `accessible=${a.is_accessible}` : '',
+              a.description ? `desc=${a.description}` : '',
+            ].filter(Boolean))
+          ]),
+        ],
+      };
+    }
+
+    function renderDetailTable(rows) {
+      const f = detailFilter.trim().toLowerCase();
+      const filtered = rows.filter(([k, v]) => {
+        if (!f) return true;
+        const text = `${k} ${valueToText(v)}`.toLowerCase();
+        return text.includes(f);
+      });
+      if (!filtered.length) {
+        return '<div class=\"muted\">No matching fields in this section.</div>';
+      }
+      return `<table class=\"detail-table\"><tbody>${
+        filtered.map(([k, v]) => `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(valueToText(v))}</td></tr>`).join('')
+      }</tbody></table>`;
+    }
+
+    function renderDetailPanel() {
+      const detailEl = document.getElementById('detail');
+      if (!currentRecord) {
+        detailEl.textContent = 'Select a paper to view structured details.';
+        return;
+      }
+
+      const tabs = [
+        ['overview', 'Overview'],
+        ['metadata', 'Metadata'],
+        ['methods', 'Methods'],
+        ['results', 'Results'],
+        ['data', 'Data'],
+        ['raw', 'Raw JSON'],
+      ];
+      const rowsByTab = buildDetailRows(currentRecord);
+      const isRaw = detailTab === 'raw';
+      const body = isRaw
+        ? `<pre>${escapeHtml(JSON.stringify(currentRecord, null, 2))}</pre>`
+        : renderDetailTable(rowsByTab[detailTab] || []);
+
+      detailEl.innerHTML = `
+        <div class=\"detail-tabs\">
+          ${tabs.map(([id, label]) => `<button class=\"detail-tab ${id === detailTab ? 'active' : ''}\" data-tab=\"${id}\">${label}</button>`).join('')}
+        </div>
+        <div class=\"detail-tools\">
+          ${isRaw ? '' : '<input id=\"detail_filter\" placeholder=\"Filter this section...\" />'}
+        </div>
+        ${body}
+      `;
+
+      detailEl.querySelectorAll('.detail-tab').forEach(btn => {
+        btn.onclick = () => {
+          detailTab = btn.dataset.tab || 'overview';
+          detailFilter = '';
+          renderDetailPanel();
+        };
+      });
+      const filterEl = document.getElementById('detail_filter');
+      if (filterEl) {
+        filterEl.value = detailFilter;
+        filterEl.oninput = (ev) => {
+          detailFilter = ev.target.value || '';
+          renderDetailPanel();
+        };
       }
     }
 
@@ -184,7 +349,10 @@ HTML_PAGE = """<!doctype html>
         tr.onclick = async () => {
           const detailRes = await fetch('/api/paper/' + row.paper_id);
           const detail = await detailRes.json();
-          document.getElementById('detail').textContent = JSON.stringify(detail.record_json, null, 2);
+          currentRecord = detail.record_json || null;
+          detailTab = 'overview';
+          detailFilter = '';
+          renderDetailPanel();
         };
         tbody.appendChild(tr);
       });
