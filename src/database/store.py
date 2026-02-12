@@ -567,7 +567,7 @@ class PaperDatabase:
         journal_rows = self.conn.execute(
             """
             SELECT COALESCE(journal, 'Unknown') AS journal, COUNT(*) AS count
-              FROM papers
+              FROM papers p
              GROUP BY COALESCE(journal, 'Unknown')
              ORDER BY count DESC, journal ASC
             """
@@ -659,3 +659,61 @@ class PaperDatabase:
             "versions": versions,
             "db_path": str(self.db_path),
         }
+
+    def find_suspect_metadata(self, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT p.paper_id, p.title, p.doi, p.pmid, p.journal, p.publication_date, p.record_json,
+                   (
+                       SELECT v.source_path
+                         FROM paper_versions v
+                        WHERE v.paper_id = p.paper_id
+                          AND v.source_path IS NOT NULL
+                     ORDER BY v.id DESC
+                        LIMIT 1
+                   ) AS latest_source_path
+              FROM papers p
+          ORDER BY p.updated_at DESC
+             LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            record = PaperRecord.model_validate(json.loads(row["record_json"]))
+            reasons: list[str] = []
+            if not record.metadata.doi and not record.metadata.pmid:
+                reasons.append("missing_doi_and_pmid")
+            if not (record.metadata.journal or "").strip():
+                reasons.append("missing_journal")
+            if (record.metadata.journal or "").strip().lower().startswith("unknown"):
+                reasons.append("unknown_venue")
+            if (record.metadata.publication_date or "").strip().lower().startswith("unknown"):
+                reasons.append("unknown_publication_date")
+            if not record.metadata.keywords or len(record.metadata.keywords) < 3:
+                reasons.append("sparse_keywords")
+            if not record.metadata.authors or record.metadata.authors == ["Unknown author"]:
+                reasons.append("missing_authors")
+            doi_lower = (record.metadata.doi or "").lower().strip()
+            if (
+                (record.metadata.journal or "").strip().lower() == "scientific data"
+                and doi_lower
+                and not doi_lower.startswith("10.1038/s41597")
+            ):
+                reasons.append("journal_doi_mismatch_scientific_data")
+
+            if reasons:
+                out.append(
+                    {
+                        "paper_id": row["paper_id"],
+                        "title": row["title"],
+                        "doi": row["doi"],
+                        "pmid": row["pmid"],
+                        "journal": row["journal"],
+                        "publication_date": row["publication_date"],
+                        "latest_source_path": row["latest_source_path"],
+                        "reasons": reasons,
+                    }
+                )
+        return out

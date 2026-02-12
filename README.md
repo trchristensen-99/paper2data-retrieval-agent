@@ -60,6 +60,9 @@ You can ingest extraction outputs into a persistent SQLite database that support
   - `uv run python -m src.database_cli --db outputs/paper_terminal.db stats`
 - Review and selectively update one existing DB entry against source markdown:
   - `uv run python -m src.database_cli --db outputs/paper_terminal.db review-update --paper-id <paper_id> --paper-markdown <path/to/paper.md> --sections metadata,methods,results`
+- List suspect metadata rows and optionally print review-update commands:
+  - `uv run python -m src.database_cli --db outputs/paper_terminal.db suspect-metadata --limit 100`
+  - `uv run python -m src.database_cli --db outputs/paper_terminal.db suspect-metadata --print-review-commands --paper-root ../data_for_agents_example/data30_final`
 - Local web UI (summary + search/filter + full record JSON viewer):
   - `uv run python -m src.web_app --db outputs/paper_terminal.db --host 127.0.0.1 --port 8080`
   - Open `http://127.0.0.1:8080`

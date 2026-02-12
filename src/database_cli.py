@@ -70,6 +70,51 @@ def _cmd_init(args: argparse.Namespace) -> None:
         db.close()
 
 
+def _cmd_suspect_metadata(args: argparse.Namespace) -> None:
+    db = PaperDatabase(args.db)
+    try:
+        rows = db.find_suspect_metadata(limit=args.limit)
+        if not rows:
+            print("No suspect metadata rows found.")
+            return
+        print(json.dumps(rows, indent=2))
+        if args.print_review_commands:
+            print("\n# Suggested review-update commands")
+            for row in rows:
+                paper_id = row["paper_id"]
+                latest_source_path = str(row.get("latest_source_path") or "")
+                if latest_source_path.lower().endswith(".md"):
+                    md_path = row["latest_source_path"]
+                    print(
+                        "uv run python -m src.database_cli "
+                        f"--db {args.db} review-update "
+                        f"--paper-id {paper_id} "
+                        f"--paper-markdown {md_path} "
+                        "--sections metadata"
+                    )
+                elif args.paper_root:
+                    md_path = args.paper_root / paper_id / "data_for_retrieval_agent" / f"{paper_id}.md"
+                    print(
+                        "uv run python -m src.database_cli "
+                        f"--db {args.db} review-update "
+                        f"--paper-id {paper_id} "
+                        f"--paper-markdown {md_path} "
+                        "--sections metadata"
+                    )
+                else:
+                    print(
+                        "uv run python -m src.database_cli "
+                        f"--db {args.db} review-update "
+                        f"--paper-id {paper_id} "
+                        "--paper-markdown <path/to/paper.md> "
+                        "--sections metadata"
+                    )
+                    if latest_source_path:
+                        print(f"# note: latest_source_path={latest_source_path}")
+    finally:
+        db.close()
+
+
 async def _cmd_review_update(args: argparse.Namespace) -> None:
     db = PaperDatabase(args.db)
     try:
@@ -133,6 +178,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Comma-separated: metadata,methods,results,data_accessions,data_availability,code_repositories (or 'all')",
     )
     review_p.set_defaults(func=lambda a: _cmd_review_update(a))
+
+    suspect_p = sub.add_parser(
+        "suspect-metadata",
+        help="List records with likely metadata quality issues",
+    )
+    suspect_p.add_argument("--limit", type=int, default=100)
+    suspect_p.add_argument(
+        "--print-review-commands",
+        action="store_true",
+        help="Print ready-to-run review-update commands",
+    )
+    suspect_p.add_argument(
+        "--paper-root",
+        type=Path,
+        default=None,
+        help="Optional root folder containing <paper_id>/data_for_retrieval_agent/<paper_id>.md",
+    )
+    suspect_p.set_defaults(func=lambda a: _cmd_suspect_metadata(a))
 
     return p
 
