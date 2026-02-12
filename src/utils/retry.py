@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import re
 from typing import Any
 
-from openai import RateLimitError
+from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
 
 def _extract_wait_seconds(error_text: str) -> float:
@@ -15,7 +16,7 @@ def _extract_wait_seconds(error_text: str) -> float:
 
 
 async def run_with_rate_limit_retry(coro_factory: Any, max_retries: int = 4) -> Any:
-    """Run an async callable and retry on OpenAI TPM/RPM limits."""
+    """Run an async callable and retry on transient OpenAI/API network failures."""
     attempt = 0
     while True:
         try:
@@ -25,4 +26,11 @@ async def run_with_rate_limit_retry(coro_factory: Any, max_retries: int = 4) -> 
             if attempt > max_retries:
                 raise
             wait_seconds = _extract_wait_seconds(str(exc)) + 1.0
+            await asyncio.sleep(wait_seconds)
+        except (APIConnectionError, APITimeoutError, InternalServerError):
+            attempt += 1
+            if attempt > max_retries:
+                raise
+            # Exponential backoff with a bit of jitter to avoid retry stampedes.
+            wait_seconds = min(60.0, (2**attempt) + random.uniform(0.0, 1.0))
             await asyncio.sleep(wait_seconds)

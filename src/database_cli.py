@@ -5,6 +5,7 @@ import asyncio
 import json
 from pathlib import Path
 
+from src.database.reviewer import parse_sections, review_and_update_entry
 from src.database.store import PaperDatabase
 from src.utils.env import load_env_file
 
@@ -69,6 +70,32 @@ def _cmd_init(args: argparse.Namespace) -> None:
         db.close()
 
 
+async def _cmd_review_update(args: argparse.Namespace) -> None:
+    db = PaperDatabase(args.db)
+    try:
+        sections = parse_sections(args.sections)
+        result = await review_and_update_entry(
+            db=db,
+            paper_id=args.paper_id,
+            paper_markdown_path=args.paper_markdown,
+            sections=sections,
+        )
+        print(
+            json.dumps(
+                {
+                    "paper_id": result.paper_id,
+                    "sections_updated": result.sections_updated,
+                    "changed_top_level_fields": result.changed_top_level_fields,
+                    "confidence_before": result.confidence_before,
+                    "confidence_after": result.confidence_after,
+                },
+                indent=2,
+            )
+        )
+    finally:
+        db.close()
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Paper2Data queryable database CLI")
     p.add_argument("--db", type=str, default="outputs/paper_terminal.db", help="SQLite DB path")
@@ -92,6 +119,20 @@ def _build_parser() -> argparse.ArgumentParser:
 
     stats_p = sub.add_parser("stats", help="Database summary")
     stats_p.set_defaults(func=lambda a: _cmd_stats(a))
+
+    review_p = sub.add_parser(
+        "review-update",
+        help="Re-run extraction on source paper and selectively update an existing DB entry",
+    )
+    review_p.add_argument("--paper-id", type=str, required=True)
+    review_p.add_argument("--paper-markdown", type=Path, required=True)
+    review_p.add_argument(
+        "--sections",
+        type=str,
+        default="all",
+        help="Comma-separated: metadata,methods,results,data_accessions,data_availability,code_repositories (or 'all')",
+    )
+    review_p.set_defaults(func=lambda a: _cmd_review_update(a))
 
     return p
 

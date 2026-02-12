@@ -9,6 +9,7 @@ from pathlib import Path
 
 from src.agents.manager import PipelineArtifacts, run_pipeline
 from src.utils.env import load_env_file
+from src.utils.network import check_openai_dns
 
 CRITICAL_FIELDS = [
     "metadata.title",
@@ -67,7 +68,36 @@ async def _run_one(input_path: Path, run_root: Path) -> PaperRunSummary:
 
     try:
         paper_text = input_path.read_text(encoding="utf-8")
-        artifacts: PipelineArtifacts = await run_pipeline(paper_text)
+
+        last_error: Exception | None = None
+        artifacts: PipelineArtifacts | None = None
+        for attempt in range(1, 4):
+            try:
+                artifacts = await run_pipeline(paper_text)
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                msg = str(exc).lower()
+                transient = any(
+                    token in msg
+                    for token in (
+                        "connection error",
+                        "temporarily unavailable",
+                        "timed out",
+                        "nodename nor servname provided",
+                    )
+                )
+                if not transient or attempt == 3:
+                    raise
+                wait_seconds = 5 * attempt
+                print(
+                    f"[batch] transient_error paper_id={paper_id} attempt={attempt} "
+                    f"wait_seconds={wait_seconds} error={exc}",
+                    flush=True,
+                )
+                await asyncio.sleep(wait_seconds)
+        if artifacts is None and last_error is not None:
+            raise last_error
 
         structured_path = paper_out / "structured_record.json"
         report_path = paper_out / "retrieval_report.md"
@@ -188,6 +218,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     load_env_file()
+    ok, msg = check_openai_dns()
+    if not ok:
+        raise RuntimeError(
+            f"{msg}. Fix DNS/network and retry batch. "
+            "Try: nslookup api.openai.com, then set DNS to 1.1.1.1 or 8.8.8.8."
+        )
     args = _build_parser().parse_args()
     summary_path = asyncio.run(_run_batch(args.input_root, args.output_root))
     print(f"Batch run complete: {summary_path}")

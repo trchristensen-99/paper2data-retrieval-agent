@@ -389,6 +389,52 @@ class PaperDatabase:
         record = PaperRecord.model_validate(payload)
         return await self.upsert_record(record, source_path=str(path))
 
+    def fetch_paper_record(self, paper_id: str) -> PaperRecord | None:
+        row = self.conn.execute("SELECT record_json FROM papers WHERE paper_id = ?", (paper_id,)).fetchone()
+        if not row:
+            return None
+        return PaperRecord.model_validate(json.loads(row["record_json"]))
+
+    def replace_paper_record(
+        self,
+        paper_id: str,
+        record: PaperRecord,
+        source_path: str | None = None,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE papers
+               SET canonical_key = ?,
+                   title = ?,
+                   normalized_title = ?,
+                   doi = ?,
+                   pmid = ?,
+                   journal = ?,
+                   publication_date = ?,
+                   extraction_confidence = ?,
+                   source_count = 1,
+                   record_json = ?,
+                   updated_at = ?
+             WHERE paper_id = ?
+            """,
+            (
+                compute_paper_key(record),
+                record.metadata.title,
+                _norm_text(record.metadata.title),
+                record.metadata.doi,
+                record.metadata.pmid,
+                _infer_venue(record),
+                record.metadata.publication_date,
+                record.extraction_confidence,
+                _safe_json(record.model_dump()),
+                _now(),
+                paper_id,
+            ),
+        )
+        self._insert_version(paper_id, source_path, record)
+        self._update_search_row(paper_id, record)
+        self.conn.commit()
+
     async def ingest_many(self, paths: Iterable[Path]) -> list[UpsertResult]:
         out: list[UpsertResult] = []
         for p in paths:

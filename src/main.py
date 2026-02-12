@@ -8,6 +8,7 @@ from pathlib import Path
 
 from src.agents.manager import run_pipeline
 from src.utils.env import load_env_file
+from src.utils.network import check_openai_dns
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -68,6 +69,12 @@ async def _run(args: argparse.Namespace) -> dict[str, str]:
 
 def main() -> None:
     load_env_file()
+    ok, msg = check_openai_dns()
+    if not ok:
+        raise RuntimeError(
+            f"{msg}. Fix DNS/network and retry. "
+            "Try: nslookup api.openai.com, then set DNS to 1.1.1.1 or 8.8.8.8."
+        )
     parser = _build_arg_parser()
     args = parser.parse_args()
     summary = asyncio.run(_run(args))

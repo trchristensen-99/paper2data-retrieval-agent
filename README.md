@@ -14,6 +14,11 @@ Multi-agent scientific paper retrieval pipeline for the Paper2Data project.
 3. Run pipeline:
    - `uv run python -m src.main ../data_for_agents_example/data_for_retrieval_agent/s41597-021-00905-y.md`
 
+If runs fail with `APIConnectionError` / `nodename nor servname provided`:
+- Check DNS: `nslookup api.openai.com`
+- Ensure VPN/proxy/firewall is not blocking API access.
+- On macOS, set DNS servers (Network Settings) to `1.1.1.1` and `8.8.8.8`, then retry.
+
 ## Model Configuration
 - Default model for all agents is `gpt-5-nano` (cost-optimized).
 - Override globally:
@@ -52,6 +57,8 @@ You can ingest extraction outputs into a persistent SQLite database that support
   - `uv run python -m src.database_cli --db outputs/paper_terminal.db show --paper-id <paper_id>`
 - DB stats:
   - `uv run python -m src.database_cli --db outputs/paper_terminal.db stats`
+- Review and selectively update one existing DB entry against source markdown:
+  - `uv run python -m src.database_cli --db outputs/paper_terminal.db review-update --paper-id <paper_id> --paper-markdown <path/to/paper.md> --sections metadata,methods,results`
 - Local web UI (summary + search/filter + full record JSON viewer):
   - `uv run python -m src.web_app --db outputs/paper_terminal.db --host 127.0.0.1 --port 8080`
   - Open `http://127.0.0.1:8080`
