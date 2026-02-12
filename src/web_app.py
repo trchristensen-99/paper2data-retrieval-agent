@@ -78,6 +78,7 @@ HTML_PAGE = """<!doctype html>
       </table>
       <pre id=\"detail\">Select a paper to view full structured JSON.</pre>
     </div>
+    <div class=\"muted\" id=\"status\"></div>
   </div>
   <script>
     let sortBy = 'updated_at';
@@ -101,6 +102,9 @@ HTML_PAGE = """<!doctype html>
         o.textContent = `${x.name} (${x.count})`;
         el.appendChild(o);
       });
+      if (el.multiple) {
+        Array.from(el.options).forEach(o => { o.selected = false; });
+      }
     }
 
     async function loadSummary() {
@@ -145,7 +149,15 @@ HTML_PAGE = """<!doctype html>
       const res = await fetch('/api/papers?' + params.toString());
       const rows = await res.json();
       const tbody = document.getElementById('rows');
+      const statusMsg = document.getElementById('status');
       tbody.innerHTML = '';
+      if (!Array.isArray(rows)) {
+        const error = rows && rows.error ? rows.error : 'Unexpected API response';
+        statusMsg.textContent = `Query failed: ${error}`;
+        tbody.innerHTML = '<tr><td colspan=\"5\">Query error. Check status below.</td></tr>';
+        return;
+      }
+      statusMsg.textContent = `Matched ${rows.length} paper(s). sort=${sortBy} ${sortDir}.`;
 
       rows.forEach(row => {
         const tr = document.createElement('tr');
@@ -181,6 +193,8 @@ HTML_PAGE = """<!doctype html>
     document.getElementById('run').onclick = runQuery;
     window.onload = async () => {
       await loadSummary();
+      document.getElementById('assay').selectedIndex = -1;
+      document.getElementById('organism').selectedIndex = -1;
       initSortHandlers();
       await runQuery();
     };
