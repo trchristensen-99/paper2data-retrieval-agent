@@ -40,6 +40,7 @@ You can ingest extraction outputs into a persistent SQLite database that support
 - Local web UI (summary + search/filter + full record JSON viewer):
   - `uv run python -m src.web_app --db outputs/paper_terminal.db --host 127.0.0.1 --port 8080`
   - Open `http://127.0.0.1:8080`
+  - Includes sortable columns and filters for journal, repository, data availability status, assay type, organism, and confidence threshold.
 - Compare baseline vs updated batch summaries:
   - `uv run python -m src.compare_batches --baseline <baseline_summary.json> --updated <updated_summary.json>`
 

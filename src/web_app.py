@@ -10,10 +10,10 @@ from src.utils.env import load_env_file
 
 
 HTML_PAGE = """<!doctype html>
-<html lang="en">
+<html lang=\"en\">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
   <title>Paper2Data Terminal</title>
   <style>
     :root {
@@ -23,21 +23,24 @@ HTML_PAGE = """<!doctype html>
       --accent: #0a7ea4;
       --line: #d6dde6;
     }
-    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    .wrap { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; }
+    .wrap { max-width: 1240px; margin: 0 auto; padding: 20px; }
     h1 { margin: 0 0 14px; font-size: 24px; }
     .grid { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; margin-bottom: 16px; }
     .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
     .card .k { color: #5a6778; font-size: 12px; }
     .card .v { font-size: 21px; font-weight: 700; }
-    .filters { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 8px; margin-bottom: 10px; }
+    .filters { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr 1fr auto; gap: 8px; margin-bottom: 10px; }
     input, select, button { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff; }
+    select[multiple] { min-height: 84px; }
     button { background: var(--accent); color: #fff; border-color: var(--accent); cursor: pointer; }
     table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eef2f6; vertical-align: top; }
+    th.sortable { cursor: pointer; user-select: none; }
     tr:hover { background: #f7fbfd; cursor: pointer; }
     .split { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; }
-    pre { white-space: pre-wrap; word-break: break-word; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 0; max-height: 520px; overflow: auto; }
+    pre { white-space: pre-wrap; word-break: break-word; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 0; max-height: 560px; overflow: auto; }
+    .muted { color: #5a6778; font-size: 12px; margin: 6px 0 12px; }
     @media (max-width: 900px) {
       .grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
       .filters { grid-template-columns: 1fr; }
@@ -46,25 +49,60 @@ HTML_PAGE = """<!doctype html>
   </style>
 </head>
 <body>
-  <div class="wrap">
+  <div class=\"wrap\">
     <h1>Paper2Data Terminal</h1>
-    <div class="grid" id="summary"></div>
-    <div class="filters">
-      <input id="q" placeholder="Search title, DOI, methods, findings..." />
-      <select id="journal"><option value="">All journals</option></select>
-      <select id="repo"><option value="">All repositories</option></select>
-      <input id="min_conf" type="number" min="0" max="1" step="0.01" placeholder="Min conf (0-1)" />
-      <button id="run">Run</button>
+    <div class=\"grid\" id=\"summary\"></div>
+    <div class=\"muted\">Tip: Cmd/Ctrl-click to multi-select assays or organisms.</div>
+    <div class=\"filters\">
+      <input id=\"q\" placeholder=\"Search title, DOI, methods, findings...\" />
+      <select id=\"journal\"><option value=\"\">All journals</option></select>
+      <select id=\"repo\"><option value=\"\">All repositories</option></select>
+      <select id=\"status\"><option value=\"\">All availability</option></select>
+      <select id=\"assay\" multiple></select>
+      <select id=\"organism\" multiple></select>
+      <input id=\"min_conf\" type=\"number\" min=\"0\" max=\"1\" step=\"0.01\" placeholder=\"Min conf (0-1)\" />
+      <button id=\"run\">Run</button>
     </div>
-    <div class="split">
+    <div class=\"split\">
       <table>
-        <thead><tr><th>Title</th><th>Journal</th><th>Date</th><th>Conf</th><th>Sources</th></tr></thead>
-        <tbody id="rows"></tbody>
+        <thead>
+          <tr>
+            <th class=\"sortable\" data-sort=\"title\">Title</th>
+            <th class=\"sortable\" data-sort=\"journal\">Journal</th>
+            <th class=\"sortable\" data-sort=\"publication_date\">Date</th>
+            <th class=\"sortable\" data-sort=\"extraction_confidence\">Conf</th>
+            <th class=\"sortable\" data-sort=\"source_count\">Sources</th>
+          </tr>
+        </thead>
+        <tbody id=\"rows\"></tbody>
       </table>
-      <pre id="detail">Select a paper to view full structured JSON.</pre>
+      <pre id=\"detail\">Select a paper to view full structured JSON.</pre>
     </div>
   </div>
   <script>
+    let sortBy = 'updated_at';
+    let sortDir = 'desc';
+
+    function selectedValues(id) {
+      return Array.from(document.getElementById(id).selectedOptions).map(o => o.value).filter(Boolean);
+    }
+
+    function fillOptions(id, items, placeholder) {
+      const el = document.getElementById(id);
+      if (!el.multiple) {
+        const base = document.createElement('option');
+        base.value = '';
+        base.textContent = placeholder;
+        el.appendChild(base);
+      }
+      items.forEach(x => {
+        const o = document.createElement('option');
+        o.value = x.name;
+        o.textContent = `${x.name} (${x.count})`;
+        el.appendChild(o);
+      });
+    }
+
     async function loadSummary() {
       const [statsRes, facetsRes] = await Promise.all([fetch('/api/summary'), fetch('/api/facets')]);
       const stats = await statsRes.json();
@@ -74,21 +112,13 @@ HTML_PAGE = """<!doctype html>
         ['Versions', stats.versions],
         ['Total Sources', stats.total_sources],
         ['DB Path', stats.db_path]
-      ].map(([k,v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
-      const journal = document.getElementById('journal');
-      facets.journals.forEach(j => {
-        const o = document.createElement('option');
-        o.value = j.journal === 'Unknown' ? '' : j.journal;
-        o.textContent = `${j.journal} (${j.count})`;
-        journal.appendChild(o);
-      });
-      const repo = document.getElementById('repo');
-      facets.repositories.forEach(r => {
-        const o = document.createElement('option');
-        o.value = r.name;
-        o.textContent = `${r.name} (${r.count})`;
-        repo.appendChild(o);
-      });
+      ].map(([k,v]) => `<div class=\"card\"><div class=\"k\">${k}</div><div class=\"v\">${v}</div></div>`).join('');
+
+      fillOptions('journal', facets.journals.map(j => ({name: j.journal === 'Unknown' ? '' : j.journal, count: j.count})).filter(x => x.name), 'All journals');
+      fillOptions('repo', facets.repositories, 'All repositories');
+      fillOptions('status', facets.data_statuses || [], 'All availability');
+      fillOptions('assay', facets.assay_types || [], '');
+      fillOptions('organism', facets.organisms || [], '');
     }
 
     async function runQuery() {
@@ -96,16 +126,27 @@ HTML_PAGE = """<!doctype html>
       const q = document.getElementById('q').value.trim();
       const journal = document.getElementById('journal').value;
       const repo = document.getElementById('repo').value;
+      const status = document.getElementById('status').value;
+      const assays = selectedValues('assay');
+      const organisms = selectedValues('organism');
       const minConf = document.getElementById('min_conf').value.trim();
+
       if (q) params.set('q', q);
       if (journal) params.set('journal', journal);
       if (repo) params.set('repository', repo);
+      if (status) params.set('data_status', status);
+      assays.forEach(v => params.append('assay', v));
+      organisms.forEach(v => params.append('organism', v));
       if (minConf) params.set('min_confidence', minConf);
-      params.set('limit', '200');
+      params.set('sort_by', sortBy);
+      params.set('sort_dir', sortDir);
+      params.set('limit', '300');
+
       const res = await fetch('/api/papers?' + params.toString());
       const rows = await res.json();
       const tbody = document.getElementById('rows');
       tbody.innerHTML = '';
+
       rows.forEach(row => {
         const tr = document.createElement('tr');
         tr.innerHTML = `<td>${row.title || ''}</td><td>${row.journal || ''}</td><td>${row.publication_date || ''}</td><td>${(row.extraction_confidence ?? '').toString()}</td><td>${row.source_count}</td>`;
@@ -116,14 +157,31 @@ HTML_PAGE = """<!doctype html>
         };
         tbody.appendChild(tr);
       });
+
       if (rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5">No papers matched.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan=\"5\">No papers matched.</td></tr>';
       }
+    }
+
+    function initSortHandlers() {
+      document.querySelectorAll('th.sortable').forEach(th => {
+        th.onclick = () => {
+          const col = th.dataset.sort;
+          if (sortBy === col) {
+            sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+          } else {
+            sortBy = col;
+            sortDir = 'asc';
+          }
+          runQuery();
+        };
+      });
     }
 
     document.getElementById('run').onclick = runQuery;
     window.onload = async () => {
       await loadSummary();
+      initSortHandlers();
       await runQuery();
     };
   </script>
@@ -173,8 +231,13 @@ class _Handler(BaseHTTPRequestHandler):
             q = params.get("q", [""])[0]
             journal = params.get("journal", [""])[0] or None
             repository = params.get("repository", [""])[0] or None
+            data_status = params.get("data_status", [""])[0] or None
+            assay_types = [x for x in params.get("assay", []) if x.strip()]
+            organisms = [x for x in params.get("organism", []) if x.strip()]
             min_confidence_raw = params.get("min_confidence", [""])[0]
             limit_raw = params.get("limit", ["100"])[0]
+            sort_by = params.get("sort_by", ["updated_at"])[0]
+            sort_dir = params.get("sort_dir", ["desc"])[0]
             min_confidence = None
             if min_confidence_raw:
                 try:
@@ -191,7 +254,12 @@ class _Handler(BaseHTTPRequestHandler):
                 q=q,
                 journal=journal,
                 repository=repository,
+                assay_types=assay_types,
+                organisms=organisms,
+                data_status=data_status,
                 min_confidence=min_confidence,
+                sort_by=sort_by,
+                sort_dir=sort_dir,
                 limit=limit,
             )
             self._send_json(rows)

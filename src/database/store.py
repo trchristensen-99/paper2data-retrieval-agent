@@ -100,11 +100,25 @@ class PaperDatabase:
                 methods TEXT,
                 findings TEXT,
                 repositories TEXT,
+                assay_types TEXT,
+                organisms TEXT,
+                data_status TEXT,
                 FOREIGN KEY(paper_id) REFERENCES papers(paper_id)
             )
             """
         )
+        self._ensure_column("paper_search", "assay_types", "TEXT")
+        self._ensure_column("paper_search", "organisms", "TEXT")
+        self._ensure_column("paper_search", "data_status", "TEXT")
         self.conn.commit()
+
+    def _table_columns(self, table: str) -> set[str]:
+        rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return {str(r["name"]) for r in rows}
+
+    def _ensure_column(self, table: str, column: str, sql_type: str) -> None:
+        if column not in self._table_columns(table):
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
 
     def _find_existing(self, record: PaperRecord) -> sqlite3.Row | None:
         cur = self.conn.cursor()
@@ -140,10 +154,14 @@ class PaperDatabase:
         repositories = "; ".join(
             sorted({x.repository for x in record.data_accessions} | set(record.code_repositories))
         )
+        assay_types = "; ".join(record.methods.assay_types)
+        organisms = "; ".join(record.methods.organisms)
+        data_status = record.data_availability.overall_status
         self.conn.execute(
             """
-            INSERT INTO paper_search (paper_id, title, authors, journal, keywords, methods, findings, repositories)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO paper_search
+            (paper_id, title, authors, journal, keywords, methods, findings, repositories, assay_types, organisms, data_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(paper_id) DO UPDATE SET
                 title=excluded.title,
                 authors=excluded.authors,
@@ -151,7 +169,10 @@ class PaperDatabase:
                 keywords=excluded.keywords,
                 methods=excluded.methods,
                 findings=excluded.findings,
-                repositories=excluded.repositories
+                repositories=excluded.repositories,
+                assay_types=excluded.assay_types,
+                organisms=excluded.organisms,
+                data_status=excluded.data_status
             """,
             (
                 paper_id,
@@ -162,6 +183,9 @@ class PaperDatabase:
                 methods,
                 findings,
                 repositories,
+                assay_types,
+                organisms,
+                data_status,
             ),
         )
 
@@ -294,7 +318,12 @@ class PaperDatabase:
         q: str = "",
         journal: str | None = None,
         repository: str | None = None,
+        assay_types: list[str] | None = None,
+        organisms: list[str] | None = None,
+        data_status: str | None = None,
         min_confidence: float | None = None,
+        sort_by: str = "updated_at",
+        sort_dir: str = "desc",
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         clauses: list[str] = []
@@ -321,6 +350,21 @@ class PaperDatabase:
         if repository:
             clauses.append("s.repositories LIKE ?")
             params.append(f"%{repository}%")
+        if assay_types:
+            assay_sub = []
+            for value in assay_types:
+                assay_sub.append("s.assay_types LIKE ?")
+                params.append(f"%{value}%")
+            clauses.append("(" + " OR ".join(assay_sub) + ")")
+        if organisms:
+            org_sub = []
+            for value in organisms:
+                org_sub.append("s.organisms LIKE ?")
+                params.append(f"%{value}%")
+            clauses.append("(" + " OR ".join(org_sub) + ")")
+        if data_status:
+            clauses.append("s.data_status = ?")
+            params.append(data_status)
         if min_confidence is not None:
             clauses.append("p.extraction_confidence >= ?")
             params.append(min_confidence)
@@ -329,15 +373,29 @@ class PaperDatabase:
         if clauses:
             where_sql = "WHERE " + " AND ".join(clauses)
 
+        sort_cols = {
+            "title": "p.title",
+            "journal": "p.journal",
+            "publication_date": "p.publication_date",
+            "extraction_confidence": "p.extraction_confidence",
+            "source_count": "p.source_count",
+            "updated_at": "p.updated_at",
+        }
+        sort_col = sort_cols.get(sort_by, "p.updated_at")
+        direction = "ASC" if sort_dir.lower() == "asc" else "DESC"
+
         rows = self.conn.execute(
             f"""
             SELECT p.paper_id, p.title, p.doi, p.pmid, p.journal, p.publication_date,
                    p.extraction_confidence, p.source_count,
-                   COALESCE(s.repositories, '') AS repositories
+                   COALESCE(s.repositories, '') AS repositories,
+                   COALESCE(s.assay_types, '') AS assay_types,
+                   COALESCE(s.organisms, '') AS organisms,
+                   COALESCE(s.data_status, '') AS data_status
               FROM papers p
               LEFT JOIN paper_search s ON s.paper_id = p.paper_id
               {where_sql}
-             ORDER BY p.updated_at DESC
+             ORDER BY {sort_col} {direction}
              LIMIT ?
             """,
             tuple(params + [limit]),
@@ -353,21 +411,54 @@ class PaperDatabase:
              ORDER BY count DESC, journal ASC
             """
         ).fetchall()
-        repo_rows = self.conn.execute("SELECT repositories FROM paper_search").fetchall()
+        repo_rows = self.conn.execute(
+            "SELECT repositories, assay_types, organisms, data_status FROM paper_search"
+        ).fetchall()
         repo_counts: dict[str, int] = {}
+        assay_counts: dict[str, int] = {}
+        organism_counts: dict[str, int] = {}
+        status_counts: dict[str, int] = {}
         for row in repo_rows:
             for token in str(row["repositories"] or "").split(";"):
                 repo = token.strip()
                 if not repo:
                     continue
                 repo_counts[repo] = repo_counts.get(repo, 0) + 1
+            for token in str(row["assay_types"] or "").split(";"):
+                assay = token.strip()
+                if not assay:
+                    continue
+                assay_counts[assay] = assay_counts.get(assay, 0) + 1
+            for token in str(row["organisms"] or "").split(";"):
+                organism = token.strip()
+                if not organism:
+                    continue
+                organism_counts[organism] = organism_counts.get(organism, 0) + 1
+            status = str(row["data_status"] or "").strip()
+            if status:
+                status_counts[status] = status_counts.get(status, 0) + 1
         repositories = [
             {"name": key, "count": value}
             for key, value in sorted(repo_counts.items(), key=lambda item: (-item[1], item[0]))
         ]
+        assay_types = [
+            {"name": key, "count": value}
+            for key, value in sorted(assay_counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
+        organisms = [
+            {"name": key, "count": value}
+            for key, value in sorted(organism_counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
+        data_statuses = [
+            {"name": key, "count": value}
+            for key, value in sorted(status_counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
         return {
             "journals": [dict(r) for r in journal_rows],
             "repositories": repositories,
+            "assay_types": assay_types,
+            "organisms": organisms,
+            "data_statuses": data_statuses,
         }
 
     def fetch_paper(self, paper_id: str) -> dict[str, Any] | None:
