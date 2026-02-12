@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from agents import Agent, Runner
+from agents import Agent, AgentOutputSchema, Runner
 
 from src.schemas.models import PaperRecord, SynthesisInput, SynthesisOutput
 from src.utils.config import AGENT_VERSION, MODELS
@@ -20,7 +20,7 @@ synthesis_agent = Agent(
     name="synthesis_agent",
     model=MODELS.synthesis,
     instructions=SYNTHESIS_PROMPT,
-    output_type=SynthesisOutput,
+    output_type=AgentOutputSchema(SynthesisOutput, strict_json_schema=False),
 )
 
 

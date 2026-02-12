@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agents import Agent, Runner
+from agents import Agent, AgentOutputSchema, Runner
 
 from src.schemas.models import ResultsSummary
 from src.utils.config import MODELS
@@ -20,7 +20,7 @@ results_agent = Agent(
     name="results_agent",
     model=MODELS.results,
     instructions=RESULTS_PROMPT,
-    output_type=ResultsSummary,
+    output_type=AgentOutputSchema(ResultsSummary, strict_json_schema=False),
 )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agents import Agent, Runner
+from agents import Agent, AgentOutputSchema, Runner
 
 from src.schemas.models import MetadataRecord
 from src.utils.config import MODELS
@@ -15,7 +15,7 @@ metadata_agent = Agent(
     name="metadata_agent",
     model=MODELS.metadata,
     instructions=METADATA_PROMPT,
-    output_type=MetadataRecord,
+    output_type=AgentOutputSchema(MetadataRecord, strict_json_schema=False),
 )
 
 

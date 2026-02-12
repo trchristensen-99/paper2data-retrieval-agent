@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
-from agents import Agent, Runner
+from agents import Agent, AgentOutputSchema, Runner
 
 from src.schemas.models import DataAccession, DataAvailabilityReport
 from src.tools.file_tools import list_ftp_files
@@ -32,7 +32,7 @@ data_availability_agent = Agent(
     model=MODELS.data_availability,
     instructions=DATA_AVAILABILITY_PROMPT,
     tools=[check_url, check_geo_accession, check_sra_accession, list_ftp_files],
-    output_type=DataAvailabilityOutput,
+    output_type=AgentOutputSchema(DataAvailabilityOutput, strict_json_schema=False),
 )
 
 
