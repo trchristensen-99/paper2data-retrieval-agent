@@ -12,7 +12,7 @@ from src.utils.retry import run_with_rate_limit_retry
 
 RESULTS_PROMPT = """You are the No-Spin Zone results extractor.
 You must adapt extraction to paper type:
-- experimental: populate `experimental_findings` (effect sizes/comparisons first), optional substantive `spin_assessment`.
+- experimental: populate `experimental_findings` (effect sizes/comparisons first).
 - dataset_descriptor: populate `dataset_properties` (size, dimensions, coverage, temporal range, format, license if present).
 - review/meta_analysis: populate `synthesized_claims` with evidence-oriented concise claims.
 - methods: populate `method_benchmarks` with task/metric/value/baseline/context when available.
@@ -71,9 +71,6 @@ def _sanitize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
     key_figures = payload.get("key_figures")
     if not isinstance(key_figures, list):
         key_figures = []
-    spin_assessment = payload.get("spin_assessment")
-    if not isinstance(spin_assessment, str) or not spin_assessment.strip():
-        spin_assessment = None
     paper_type = payload.get("paper_type")
     if not isinstance(paper_type, str) or not paper_type.strip():
         paper_type = None
@@ -85,7 +82,6 @@ def _sanitize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "synthesized_claims": _coerce_list_of_str(synthesized_claims),
         "method_benchmarks": method_benchmarks,
         "key_figures": key_figures,
-        "spin_assessment": spin_assessment,
     }
 
 
@@ -118,7 +114,7 @@ async def run_results_agent(
             "[FORMAT_FIX]\n"
             "Return JSON object with keys exactly:\n"
             "paper_type, experimental_findings, dataset_properties, synthesized_claims, "
-            "method_benchmarks, key_figures, spin_assessment.\n"
+            "method_benchmarks, key_figures.\n"
             "Values must be raw data, not schema metadata.\n"
         )
         repair_result = await run_with_rate_limit_retry(

@@ -189,7 +189,6 @@ HTML_PAGE = """<!doctype html>
         ],
         results: [
           ['Result Mode', results.paper_type || metadata.paper_type || ''],
-          ['Spin Assessment', results.spin_assessment || ''],
           ['Synthesized Claims Count', Array.isArray(results.synthesized_claims) ? results.synthesized_claims.length : 0],
           ['Experimental Findings Count', experimental.length],
           ['Dataset Properties Count', Array.isArray(results.dataset_properties) ? results.dataset_properties.length : 0],

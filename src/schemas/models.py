@@ -159,10 +159,6 @@ class ResultsSummary(BaseModel):
     synthesized_claims: list[str] = []
     method_benchmarks: list[MethodBenchmark] = []
     key_figures: list[FigureSummary] = []
-    spin_assessment: Optional[str] = Field(
-        default=None,
-        description="Brief note on whether author claims match the raw data"
-    )
 
     @field_validator(
         "experimental_findings",
@@ -181,16 +177,6 @@ class ResultsSummary(BaseModel):
     def _norm_result_paper_type(cls, value):
         v = str(value or "").strip().lower()
         return v if v in PAPER_TYPES else None
-
-    @field_validator("spin_assessment", mode="before")
-    @classmethod
-    def _clean_spin(cls, value):
-        if value is None:
-            return None
-        v = str(value).strip()
-        if not v or v.lower() in {"not_assessed", "not provided", "n/a", "none"}:
-            return None
-        return v
 
     @model_validator(mode="before")
     @classmethod

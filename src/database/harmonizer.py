@@ -147,8 +147,6 @@ def fallback_harmonize(existing: PaperRecord, incoming: PaperRecord) -> Harmoniz
         merged.results.method_benchmarks = incoming.results.method_benchmarks
     if incoming.results.paper_type and not merged.results.paper_type:
         merged.results.paper_type = incoming.results.paper_type
-    if (incoming.results.spin_assessment or "") and len(incoming.results.spin_assessment or "") > len(merged.results.spin_assessment or ""):
-        merged.results.spin_assessment = incoming.results.spin_assessment
 
     merged.data_accessions = _merge_accessions(merged.data_accessions, incoming.data_accessions)
     merged.code_repositories = _uniq_list(merged.code_repositories + incoming.code_repositories)

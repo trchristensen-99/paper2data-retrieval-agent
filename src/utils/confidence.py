@@ -16,6 +16,35 @@ def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, value))
 
 
+def _overinterpretation_penalty(results: ResultsSummary, paper_type: str) -> float:
+    """Estimate overinterpretation risk without exposing a separate spin field."""
+    heavy_claim_terms = (
+        "proves",
+        "definitive",
+        "guarantees",
+        "always",
+        "causes",
+        "establishes causality",
+    )
+    text_blobs: list[str] = []
+    text_blobs.extend([f.claim for f in results.experimental_findings])
+    text_blobs.extend(results.synthesized_claims)
+    joined = " ".join(text_blobs).lower()
+    term_hits = sum(1 for term in heavy_claim_terms if term in joined)
+    penalty = min(0.08, 0.02 * term_hits)
+
+    if paper_type == "experimental" and results.experimental_findings:
+        weak = 0
+        for f in results.experimental_findings:
+            has_support = bool((f.effect_size or "").strip() or (f.confidence_interval or "").strip() or (f.comparison or "").strip())
+            if not has_support:
+                weak += 1
+        weak_ratio = weak / len(results.experimental_findings)
+        if weak_ratio > 0.5:
+            penalty += min(0.08, 0.12 * (weak_ratio - 0.5))
+    return _clamp(penalty, 0.0, 0.16)
+
+
 @dataclass(frozen=True)
 class ConfidenceBreakdown:
     score: float
@@ -140,8 +169,9 @@ def compute_extraction_confidence(
     retry_penalty = 0.10 if quality_check.should_retry else 0.0
     qc_quality = _clamp(1.0 - missing_penalty - suspicious_penalty - retry_penalty)
     qc_component = qc_quality * 0.08
+    overclaim_penalty = _overinterpretation_penalty(results, paper_type)
 
-    raw = metadata_component + methods_component + results_component + data_access_component + qc_component
+    raw = metadata_component + methods_component + results_component + data_access_component + qc_component - overclaim_penalty
     # Track penalties for logging visibility.
     penalties = _clamp(1.0 - qc_quality, lo=0.0, hi=1.0)
     score = _clamp(raw, lo=0.0, hi=0.99)
@@ -151,5 +181,5 @@ def compute_extraction_confidence(
         methods=methods_component,
         results=results_component,
         data_access=data_access_component,
-        penalties=_clamp(penalties + retry_penalty),
+        penalties=_clamp(penalties + retry_penalty + overclaim_penalty),
     )

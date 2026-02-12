@@ -88,7 +88,6 @@ async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) 
             synthesized_claims=["Primary pattern is treatment-associated increase."],
             method_benchmarks=[MethodBenchmark(task="demo", metric="acc", value="0.9", context="test")],
             key_figures=[FigureSummary(figure_id="Fig1", description="Volcano plot", key_findings=["Gene X up"])],
-            spin_assessment="aligned",
         )
 
     async def _data(_: str, paper_type: str | None = None, guidance: str | None = None):
