@@ -49,6 +49,11 @@ HTML_PAGE = """<!doctype html>
     .detail-table { width: 100%; border-collapse: collapse; }
     .detail-table th, .detail-table td { border-bottom: 1px solid #eef2f6; text-align: left; vertical-align: top; padding: 6px; }
     .detail-table th { width: 36%; color: #435366; }
+    .subtable-wrap { border: 1px solid #e7eef5; border-radius: 8px; max-height: 280px; overflow: auto; background: #fff; }
+    .subtable { width: 100%; border-collapse: collapse; }
+    .subtable th, .subtable td { border-bottom: 1px solid #eef2f6; text-align: left; vertical-align: top; padding: 6px; font-size: 12px; }
+    .subtable th { position: sticky; top: 0; background: #f7fbfd; z-index: 1; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef5f8; border: 1px solid var(--line); font-size: 11px; margin-right: 4px; margin-bottom: 4px; }
     .muted { color: #5a6778; font-size: 12px; margin: 6px 0 12px; }
     @media (max-width: 900px) {
     .grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
@@ -181,21 +186,8 @@ HTML_PAGE = """<!doctype html>
         ],
         results: [
           ['Spin Assessment', results.spin_assessment || ''],
-          ['Qualitative Findings', valueToText(results.qualitative_findings || [])],
+          ['Qualitative Findings Count', Array.isArray(results.qualitative_findings) ? results.qualitative_findings.length : 0],
           ['Quantitative Findings Count', quant.length],
-          ...quant.map((f, i) => [
-            `Finding ${i + 1}`,
-            valueToText([
-              f.claim ? `claim=${f.claim}` : '',
-              f.metric ? `metric=${f.metric}` : '',
-              f.value ? `value=${f.value}` : '',
-              f.effect_size ? `effect_size=${f.effect_size}` : '',
-              f.confidence_interval ? `ci=${f.confidence_interval}` : '',
-              f.p_value ? `p=${f.p_value}` : '',
-              f.context ? `context=${f.context}` : '',
-              f.confidence !== undefined ? `confidence=${f.confidence}` : '',
-            ].filter(Boolean))
-          ]),
         ],
         data: [
           ['Availability Status', dataAvailability.overall_status || ''],
@@ -205,17 +197,6 @@ HTML_PAGE = """<!doctype html>
           ['Data Availability Notes', dataAvailability.notes || ''],
           ['Code Repositories', valueToText(record.code_repositories || [])],
           ['Data Accessions Count', accessions.length],
-          ...accessions.map((a, i) => [
-            `Accession ${i + 1}`,
-            valueToText([
-              a.repository ? `repo=${a.repository}` : '',
-              a.accession_id ? `id=${a.accession_id}` : '',
-              a.url ? `url=${a.url}` : '',
-              a.file_count !== undefined && a.file_count !== null ? `files=${a.file_count}` : '',
-              a.is_accessible !== undefined && a.is_accessible !== null ? `accessible=${a.is_accessible}` : '',
-              a.description ? `desc=${a.description}` : '',
-            ].filter(Boolean))
-          ]),
         ],
       };
     }
@@ -235,6 +216,97 @@ HTML_PAGE = """<!doctype html>
       }</tbody></table>`;
     }
 
+    function renderPills(items) {
+      const values = Array.isArray(items) ? items.map(x => valueToText(x)).filter(Boolean) : [];
+      if (!values.length) return '<div class=\"muted\">None</div>';
+      return `<div>${values.map(v => `<span class=\"pill\">${escapeHtml(v)}</span>`).join('')}</div>`;
+    }
+
+    function renderFindingsTable(record) {
+      const findings = ((record.results || {}).quantitative_findings || []);
+      const q = detailFilter.trim().toLowerCase();
+      const filtered = findings.filter(f => {
+        if (!q) return true;
+        return [
+          f.claim, f.metric, f.value, f.effect_size, f.confidence_interval, f.p_value, f.context, f.confidence
+        ].map(valueToText).join(' ').toLowerCase().includes(q);
+      });
+      if (!filtered.length) return '<div class=\"muted\">No matching quantitative findings.</div>';
+      return `
+        <div class=\"subtable-wrap\">
+          <table class=\"subtable\">
+            <thead>
+              <tr><th>#</th><th>Claim</th><th>Metric</th><th>Value</th><th>Effect Size</th><th>CI</th><th>p</th><th>Context</th><th>Conf</th></tr>
+            </thead>
+            <tbody>
+              ${filtered.map((f, i) => `<tr>
+                <td>${i + 1}</td>
+                <td>${escapeHtml(valueToText(f.claim))}</td>
+                <td>${escapeHtml(valueToText(f.metric))}</td>
+                <td>${escapeHtml(valueToText(f.value))}</td>
+                <td>${escapeHtml(valueToText(f.effect_size))}</td>
+                <td>${escapeHtml(valueToText(f.confidence_interval))}</td>
+                <td>${escapeHtml(valueToText(f.p_value))}</td>
+                <td>${escapeHtml(valueToText(f.context))}</td>
+                <td>${escapeHtml(valueToText(f.confidence))}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderAccessionsTable(record) {
+      const accessions = record.data_accessions || [];
+      const q = detailFilter.trim().toLowerCase();
+      const filtered = accessions.filter(a => {
+        if (!q) return true;
+        return [
+          a.repository, a.accession_id, a.url, a.file_count, a.is_accessible, a.description
+        ].map(valueToText).join(' ').toLowerCase().includes(q);
+      });
+      if (!filtered.length) return '<div class=\"muted\">No matching accessions.</div>';
+      return `
+        <div class=\"subtable-wrap\">
+          <table class=\"subtable\">
+            <thead>
+              <tr><th>#</th><th>Repository</th><th>Accession</th><th>URL</th><th>Files</th><th>Accessible</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              ${filtered.map((a, i) => `<tr>
+                <td>${i + 1}</td>
+                <td>${escapeHtml(valueToText(a.repository))}</td>
+                <td>${escapeHtml(valueToText(a.accession_id))}</td>
+                <td>${escapeHtml(valueToText(a.url))}</td>
+                <td>${escapeHtml(valueToText(a.file_count))}</td>
+                <td>${escapeHtml(valueToText(a.is_accessible))}</td>
+                <td>${escapeHtml(valueToText(a.description))}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderResultsTab(record, rows) {
+      const qualitative = ((record.results || {}).qualitative_findings || []);
+      return `
+        ${renderDetailTable(rows)}
+        <div class=\"muted\">Qualitative findings</div>
+        ${renderPills(qualitative)}
+        <div class=\"muted\" style=\"margin-top:8px;\">Quantitative findings (filter applies here)</div>
+        ${renderFindingsTable(record)}
+      `;
+    }
+
+    function renderDataTab(record, rows) {
+      return `
+        ${renderDetailTable(rows)}
+        <div class=\"muted\" style=\"margin-top:8px;\">Data accessions (filter applies here)</div>
+        ${renderAccessionsTable(record)}
+      `;
+    }
+
     function renderDetailPanel() {
       const detailEl = document.getElementById('detail');
       if (!currentRecord) {
@@ -252,9 +324,16 @@ HTML_PAGE = """<!doctype html>
       ];
       const rowsByTab = buildDetailRows(currentRecord);
       const isRaw = detailTab === 'raw';
-      const body = isRaw
-        ? `<pre>${escapeHtml(JSON.stringify(currentRecord, null, 2))}</pre>`
-        : renderDetailTable(rowsByTab[detailTab] || []);
+      let body = '';
+      if (isRaw) {
+        body = `<pre>${escapeHtml(JSON.stringify(currentRecord, null, 2))}</pre>`;
+      } else if (detailTab === 'results') {
+        body = renderResultsTab(currentRecord, rowsByTab.results || []);
+      } else if (detailTab === 'data') {
+        body = renderDataTab(currentRecord, rowsByTab.data || []);
+      } else {
+        body = renderDetailTable(rowsByTab[detailTab] || []);
+      }
 
       detailEl.innerHTML = `
         <div class=\"detail-tabs\">
