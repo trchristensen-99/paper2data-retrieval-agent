@@ -70,9 +70,11 @@ def _merge_accessions(a: list[DataAccession], b: list[DataAccession]) -> list[Da
         cur = merged[key]
         merged[key] = DataAccession(
             accession_id=cur.accession_id,
+            category=cur.category if cur.category != "external_reference" else item.category,
             repository=cur.repository,
             url=cur.url or item.url,
             description=cur.description if len(cur.description) >= len(item.description) else item.description,
+            data_format=cur.data_format or item.data_format,
             is_accessible=cur.is_accessible if cur.is_accessible is not None else item.is_accessible,
             file_count=cur.file_count if cur.file_count is not None else item.file_count,
             files_listed=cur.files_listed or item.files_listed,
@@ -98,6 +100,10 @@ def fallback_harmonize(existing: PaperRecord, incoming: PaperRecord) -> Harmoniz
         "journal",
         "publication_date",
         "conflicts_of_interest",
+        "paper_type",
+        "license",
+        "category",
+        "subcategory",
     ]:
         cur = getattr(merged.metadata, field)
         new = getattr(incoming.metadata, field)
@@ -125,17 +131,23 @@ def fallback_harmonize(existing: PaperRecord, incoming: PaperRecord) -> Harmoniz
 
     # Results: merge findings by normalized claim+metric.
     existing_keys = {
-        (_norm_text(f.claim), _norm_text(f.metric)) for f in merged.results.quantitative_findings
+        (_norm_text(f.claim), _norm_text(f.metric)) for f in merged.results.experimental_findings
     }
-    for finding in incoming.results.quantitative_findings:
+    for finding in incoming.results.experimental_findings:
         key = (_norm_text(finding.claim), _norm_text(finding.metric))
         if key not in existing_keys:
-            merged.results.quantitative_findings.append(finding)
+            merged.results.experimental_findings.append(finding)
             existing_keys.add(key)
-    merged.results.qualitative_findings = _uniq_list(
-        merged.results.qualitative_findings + incoming.results.qualitative_findings
+    merged.results.synthesized_claims = _uniq_list(
+        merged.results.synthesized_claims + incoming.results.synthesized_claims
     )
-    if len(incoming.results.spin_assessment) > len(merged.results.spin_assessment):
+    if len(incoming.results.dataset_properties) > len(merged.results.dataset_properties):
+        merged.results.dataset_properties = incoming.results.dataset_properties
+    if len(incoming.results.method_benchmarks) > len(merged.results.method_benchmarks):
+        merged.results.method_benchmarks = incoming.results.method_benchmarks
+    if incoming.results.paper_type and not merged.results.paper_type:
+        merged.results.paper_type = incoming.results.paper_type
+    if (incoming.results.spin_assessment or "") and len(incoming.results.spin_assessment or "") > len(merged.results.spin_assessment or ""):
         merged.results.spin_assessment = incoming.results.spin_assessment
 
     merged.data_accessions = _merge_accessions(merged.data_accessions, incoming.data_accessions)

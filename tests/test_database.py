@@ -9,8 +9,10 @@ from src.database.harmonizer import HarmonizationOutput
 from src.database.store import PaperDatabase
 from src.schemas.models import (
     DataAvailabilityReport,
+    DescriptiveStat,
     MetadataRecord,
     MethodsSummary,
+    MethodBenchmark,
     PaperRecord,
     ResultsSummary,
 )
@@ -25,6 +27,7 @@ def _record(title: str, doi: str | None = None, pmid: str | None = None) -> Pape
             pmid=pmid,
             journal="Sci Data",
             publication_date="2025-01-01",
+            paper_type="dataset_descriptor",
         ),
         methods=MethodsSummary(
             organisms=["Homo sapiens"],
@@ -36,9 +39,10 @@ def _record(title: str, doi: str | None = None, pmid: str | None = None) -> Pape
             methods_completeness="adequate",
         ),
         results=ResultsSummary(
-            quantitative_findings=[],
-            qualitative_findings=["baseline"],
-            spin_assessment="aligned",
+            paper_type="dataset_descriptor",
+            dataset_properties=[DescriptiveStat(property="records", value="10", context="baseline")],
+            synthesized_claims=["baseline"],
+            method_benchmarks=[MethodBenchmark(task="none", metric="none", value="n/a", context="baseline")],
         ),
         data_accessions=[],
         data_availability=DataAvailabilityReport(

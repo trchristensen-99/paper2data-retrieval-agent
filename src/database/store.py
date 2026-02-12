@@ -92,7 +92,8 @@ def _classify_field_and_subcategory(record: PaperRecord) -> tuple[str, str]:
             record.methods.experimental_design,
             " ".join(record.methods.assay_types),
             " ".join(record.methods.organisms),
-            " ".join(record.results.qualitative_findings),
+            " ".join(record.results.synthesized_claims),
+            " ".join([f"{p.property} {p.value}" for p in record.results.dataset_properties]),
         ]
     ).lower()
     patterns: list[tuple[str, str, tuple[str, ...]]] = [
@@ -207,6 +208,7 @@ class PaperDatabase:
         self._ensure_column("paper_search", "data_status", "TEXT")
         self._ensure_column("paper_search", "field_domain", "TEXT")
         self._ensure_column("paper_search", "subcategory", "TEXT")
+        self._ensure_column("paper_search", "paper_type", "TEXT")
         self._normalize_source_count()
         self._backfill_search_and_venue()
         self.conn.commit()
@@ -266,11 +268,16 @@ class PaperDatabase:
             ]
         )
         findings = " | ".join(
-            [f"{f.claim} {f.metric} {f.value}" for f in record.results.quantitative_findings]
-            + record.results.qualitative_findings
+            [f"{f.claim} {f.metric} {f.value}" for f in record.results.experimental_findings]
+            + [f"{d.property} {d.value} {d.context}" for d in record.results.dataset_properties]
+            + list(record.results.synthesized_claims)
+            + [f"{m.task} {m.metric} {m.value}" for m in record.results.method_benchmarks]
         )
         repositories = "; ".join(
-            sorted({x.repository for x in record.data_accessions} | set(record.code_repositories))
+            sorted(
+                {x.repository for x in record.data_accessions if x.category != "external_reference"}
+                | set(record.code_repositories)
+            )
         )
         assay_types = "; ".join(record.methods.assay_types)
         organisms = "; ".join(record.methods.organisms)
@@ -280,8 +287,8 @@ class PaperDatabase:
         self.conn.execute(
             """
             INSERT INTO paper_search
-            (paper_id, title, authors, journal, keywords, methods, findings, repositories, assay_types, organisms, data_status, field_domain, subcategory)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (paper_id, title, authors, journal, keywords, methods, findings, repositories, assay_types, organisms, data_status, field_domain, subcategory, paper_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(paper_id) DO UPDATE SET
                 title=excluded.title,
                 authors=excluded.authors,
@@ -294,7 +301,8 @@ class PaperDatabase:
                 organisms=excluded.organisms,
                 data_status=excluded.data_status,
                 field_domain=excluded.field_domain,
-                subcategory=excluded.subcategory
+                subcategory=excluded.subcategory,
+                paper_type=excluded.paper_type
             """,
             (
                 paper_id,
@@ -310,6 +318,7 @@ class PaperDatabase:
                 data_status,
                 field_domain,
                 subcategory,
+                (record.metadata.paper_type or record.results.paper_type or "").strip(),
             ),
         )
 
@@ -487,6 +496,7 @@ class PaperDatabase:
         *,
         q: str = "",
         journal: str | None = None,
+        paper_type: str | None = None,
         repository: str | None = None,
         assay_type: str | None = None,
         organism: str | None = None,
@@ -520,6 +530,9 @@ class PaperDatabase:
         if journal:
             clauses.append("p.journal = ?")
             params.append(journal)
+        if paper_type:
+            clauses.append("s.paper_type = ?")
+            params.append(paper_type)
         if repository:
             clauses.append("s.repositories LIKE ?")
             params.append(f"%{repository}%")
@@ -588,7 +601,7 @@ class PaperDatabase:
             """
         ).fetchall()
         repo_rows = self.conn.execute(
-            "SELECT repositories, assay_types, organisms, data_status, field_domain, subcategory FROM paper_search"
+            "SELECT repositories, assay_types, organisms, data_status, field_domain, subcategory, paper_type FROM paper_search"
         ).fetchall()
         repo_counts: dict[str, int] = {}
         assay_counts: dict[str, int] = {}
@@ -596,6 +609,7 @@ class PaperDatabase:
         status_counts: dict[str, int] = {}
         field_counts: dict[str, int] = {}
         subcat_counts: dict[str, int] = {}
+        paper_type_counts: dict[str, int] = {}
         for row in repo_rows:
             for token in str(row["repositories"] or "").split(";"):
                 repo = token.strip()
@@ -621,6 +635,9 @@ class PaperDatabase:
             subcategory = str(row["subcategory"] or "").strip()
             if subcategory:
                 subcat_counts[subcategory] = subcat_counts.get(subcategory, 0) + 1
+            paper_type = str(row["paper_type"] or "").strip()
+            if paper_type:
+                paper_type_counts[paper_type] = paper_type_counts.get(paper_type, 0) + 1
         repositories = [
             {"name": key, "count": value}
             for key, value in sorted(repo_counts.items(), key=lambda item: (-item[1], item[0]))
@@ -645,6 +662,10 @@ class PaperDatabase:
             {"name": key, "count": value}
             for key, value in sorted(subcat_counts.items(), key=lambda item: (-item[1], item[0]))
         ]
+        paper_types = [
+            {"name": key, "count": value}
+            for key, value in sorted(paper_type_counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
         taxonomy = {
             category: [{"name": sub, "count": subcat_counts.get(sub, 0)} for sub in subcats]
             for category, subcats in FIELD_SUBFIELD.items()
@@ -657,6 +678,7 @@ class PaperDatabase:
             "data_statuses": data_statuses,
             "fields": field_domains,
             "subfields": subfields,
+            "paper_types": paper_types,
             "field_subfields": taxonomy,
             # Backward compatibility for older UI clients.
             "field_domains": field_domains,

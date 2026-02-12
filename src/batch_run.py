@@ -15,11 +15,11 @@ CRITICAL_FIELDS = [
     "metadata.title",
     "metadata.authors",
     "metadata.journal",
+    "metadata.paper_type",
     "methods.assay_types",
     "methods.sample_sizes",
     "methods.experimental_design",
-    "results.quantitative_findings",
-    "results.spin_assessment",
+    "results.paper_type",
     "data_availability.overall_status",
     "data_availability.notes",
 ]

@@ -44,12 +44,8 @@ def compute_extraction_confidence(
     data_availability: DataAvailabilityReport,
     quality_check: QualityCheckOutput,
 ) -> ConfidenceBreakdown:
-    # Explicit rubric (deterministic, not model "vibes"):
-    # 1) Metadata completeness/identifiability (30%)
-    # 2) Methods reproducibility detail (25%)
-    # 3) Results quantitative fidelity (25%)
-    # 4) Data availability verification (10%)
-    # 5) QC cleanliness (10%)
+    # Explicit deterministic rubric with paper-type-aware criteria.
+    paper_type = (metadata.paper_type or results.paper_type or "experimental").strip().lower()
 
     metadata_checks = [
         bool(metadata.title.strip()),
@@ -58,9 +54,10 @@ def compute_extraction_confidence(
         bool((metadata.publication_date or "").strip()) and not (metadata.publication_date or "").strip().lower().startswith("unknown"),
         bool(metadata.keywords),
         bool(metadata.doi or metadata.pmid),
+        bool((metadata.paper_type or "").strip()),
     ]
     metadata_quality = sum(1.0 for ok in metadata_checks if ok) / len(metadata_checks)
-    metadata_component = metadata_quality * 0.30
+    metadata_component = metadata_quality * 0.26
 
     methods_checks = [
         bool(methods.experimental_design.strip()),
@@ -70,29 +67,60 @@ def compute_extraction_confidence(
         bool(methods.organisms or methods.cell_types),
     ]
     methods_quality = sum(1.0 for ok in methods_checks if ok) / len(methods_checks)
-    methods_component = methods_quality * 0.25
-
-    quantitative = results.quantitative_findings
-    if quantitative:
-        finding_scores: list[float] = []
-        for f in quantitative:
-            checks = [
-                bool(f.claim.strip()),
-                bool(f.metric.strip()),
-                bool(f.value.strip()),
-                bool(f.context.strip()),
-                bool((f.effect_size or "").strip() or (f.confidence_interval or "").strip()),
-            ]
-            finding_scores.append(sum(1.0 for ok in checks if ok) / len(checks))
-        quant_quality = sum(finding_scores) / len(finding_scores)
+    results_quality = 0.0
+    if paper_type == "experimental":
+        findings = results.experimental_findings
+        if findings:
+            finding_scores: list[float] = []
+            for f in findings:
+                checks = [
+                    bool(f.claim.strip()),
+                    bool(f.metric.strip()),
+                    bool(f.value.strip()),
+                    bool(f.context.strip()),
+                    bool((f.effect_size or "").strip() or (f.confidence_interval or "").strip()),
+                ]
+                finding_scores.append(sum(1.0 for ok in checks if ok) / len(checks))
+            results_quality = _clamp(sum(finding_scores) / len(finding_scores))
+        results_weight = 0.30
+        methods_weight = 0.22
+    elif paper_type == "dataset_descriptor":
+        props = results.dataset_properties
+        prop_quality = 0.0
+        if props:
+            prop_quality = _clamp(
+                sum(
+                    1.0
+                    for p in props
+                    if p.property.strip() and p.value.strip() and p.context.strip()
+                )
+                / len(props)
+            )
+        license_bonus = 0.1 if (metadata.license or "").strip() else 0.0
+        results_quality = _clamp(prop_quality + license_bonus)
+        results_weight = 0.40
+        methods_weight = 0.12
+    elif paper_type in {"review", "meta_analysis"}:
+        claims = results.synthesized_claims
+        results_quality = _clamp(
+            min(len(claims), 8) / 8.0 if claims else 0.0
+        )
+        results_weight = 0.34
+        methods_weight = 0.18
+    elif paper_type == "methods":
+        benches = results.method_benchmarks
+        bench_quality = _clamp(min(len(benches), 6) / 6.0 if benches else 0.0)
+        results_quality = bench_quality
+        results_weight = 0.28
+        methods_weight = 0.24
     else:
-        quant_quality = 0.0
+        claims = results.synthesized_claims
+        results_quality = _clamp(min(len(claims), 6) / 6.0 if claims else 0.0)
+        results_weight = 0.38
+        methods_weight = 0.14
 
-    spin_text = (results.spin_assessment or "").strip().lower()
-    spin_quality = 1.0 if spin_text and spin_text != "not_assessed" else 0.0
-    qual_quality = 1.0 if results.qualitative_findings else 0.0
-    results_quality = _clamp((0.70 * quant_quality) + (0.20 * spin_quality) + (0.10 * qual_quality))
-    results_component = results_quality * 0.25
+    methods_component = methods_quality * methods_weight
+    results_component = results_quality * results_weight
 
     status = (data_availability.overall_status or "").strip().lower()
     status_scores = {
@@ -105,13 +133,13 @@ def compute_extraction_confidence(
     verified_bonus = 0.2 if data_availability.verified_repositories else 0.0
     discrepancy_penalty = min(0.3, 0.05 * len(data_availability.discrepancies))
     data_quality = _clamp(status_quality + verified_bonus - discrepancy_penalty)
-    data_access_component = data_quality * 0.10
+    data_access_component = data_quality * 0.14
 
     missing_penalty = min(len(quality_check.missing_fields), 10) * 0.05
     suspicious_penalty = min(len(quality_check.suspicious_empty_fields), 10) * 0.03
     retry_penalty = 0.10 if quality_check.should_retry else 0.0
     qc_quality = _clamp(1.0 - missing_penalty - suspicious_penalty - retry_penalty)
-    qc_component = qc_quality * 0.10
+    qc_component = qc_quality * 0.08
 
     raw = metadata_component + methods_component + results_component + data_access_component + qc_component
     # Track penalties for logging visibility.

@@ -9,6 +9,7 @@ from agents import Agent
 from src.agents.data_availability import (
     DataAvailabilityOutput,
     data_availability_agent,
+    fallback_data_availability_from_text,
     run_data_availability_agent,
 )
 from src.agents.metadata import metadata_agent, run_metadata_agent
@@ -107,6 +108,21 @@ def _derive_keywords(
     return out[:8]
 
 
+def _infer_paper_type(metadata_title: str, paper_markdown: str) -> str:
+    text = f"{metadata_title}\n{paper_markdown}".lower()
+    if any(k in text for k in ("dataset descriptor", "data descriptor", "dataset", "repository")):
+        return "dataset_descriptor"
+    if any(k in text for k in ("systematic review", "scoping review", "literature review")):
+        return "review"
+    if any(k in text for k in ("meta-analysis", "meta analysis")):
+        return "meta_analysis"
+    if any(k in text for k in ("we propose", "benchmark", "method", "pipeline")):
+        return "methods"
+    if any(k in text for k in ("commentary", "perspective", "opinion")):
+        return "commentary"
+    return "experimental"
+
+
 def _missing_key_metadata_fields(
     *,
     title: str,
@@ -114,6 +130,7 @@ def _missing_key_metadata_fields(
     journal: str | None,
     publication_date: str | None,
     keywords: list[str],
+    paper_type: str | None,
 ) -> list[str]:
     missing: list[str] = []
     if not title.strip():
@@ -126,6 +143,8 @@ def _missing_key_metadata_fields(
         missing.append("metadata.publication_date")
     if not keywords:
         missing.append("metadata.keywords")
+    if _is_blank(paper_type):
+        missing.append("metadata.paper_type")
     return missing
 
 
@@ -166,6 +185,8 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     metadata.category, metadata.subcategory = normalize_category_subcategory(
         metadata.category, metadata.subcategory
     )
+    if _is_blank(metadata.paper_type):
+        metadata.paper_type = _infer_paper_type(metadata.title, paper_markdown)
     metadata.journal = _normalize_venue_name(metadata.journal)
     step_timings_seconds["metadata"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "metadata", "seconds": step_timings_seconds["metadata"]})
@@ -178,7 +199,9 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     _print_step_timing("methods", step_timings_seconds["methods"])
 
     step_start = perf_counter()
-    results = await run_results_agent(paper_markdown)
+    results = await run_results_agent(paper_markdown, paper_type=metadata.paper_type)
+    if _is_blank(results.paper_type):
+        results.paper_type = metadata.paper_type
     step_timings_seconds["results"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "results", "seconds": step_timings_seconds["results"]})
     _print_step_timing("results", step_timings_seconds["results"])
@@ -197,18 +220,16 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         )
     else:
         try:
-            data_availability = await run_data_availability_agent(paper_markdown)
+            data_availability = await run_data_availability_agent(
+                paper_markdown,
+                paper_type=metadata.paper_type,
+            )
         except Exception as exc:  # noqa: BLE001
             log_event("agent.data_availability.error", {"error": str(exc)})
-            data_availability = DataAvailabilityOutput(
-                data_accessions=[],
-                data_availability=DataAvailabilityReport(
-                    overall_status="not_checked",
-                    claimed_repositories=[],
-                    verified_repositories=[],
-                    discrepancies=[f"data_availability_agent_error: {exc}"],
-                    notes="Data availability agent failed; fallback used.",
-                ),
+            data_availability = await fallback_data_availability_from_text(
+                paper_markdown=paper_markdown,
+                paper_type=metadata.paper_type,
+                reason=str(exc),
             )
     step_timings_seconds["data_availability"] = perf_counter() - step_start
     log_event(
@@ -264,9 +285,17 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
             elif agent_name == "methods":
                 methods = await run_methods_agent(paper_markdown, guidance=reason)
             elif agent_name == "results":
-                results = await run_results_agent(paper_markdown, guidance=reason)
+                results = await run_results_agent(
+                    paper_markdown,
+                    paper_type=metadata.paper_type,
+                    guidance=reason,
+                )
             elif agent_name in {"data_availability", "data-availability"}:
-                data_availability = await run_data_availability_agent(paper_markdown, guidance=reason)
+                data_availability = await run_data_availability_agent(
+                    paper_markdown,
+                    paper_type=metadata.paper_type,
+                    guidance=reason,
+                )
             log_event("pipeline.quality_retry.step", {"agent": agent_name, "reason": reason})
         log_event("pipeline.quality_retry.end", {"notes": quality_check.notes})
 
@@ -311,6 +340,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         journal=metadata.journal,
         publication_date=metadata.publication_date,
         keywords=metadata.keywords,
+        paper_type=metadata.paper_type,
     )
     if not fast_mode and missing_before_repair:
         guidance = (
@@ -355,6 +385,10 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
             methods.organisms,
             metadata.journal,
         ) or ["unspecified"]
+    if _is_blank(metadata.paper_type):
+        metadata.paper_type = _infer_paper_type(metadata.title, paper_markdown)
+    if _is_blank(results.paper_type):
+        results.paper_type = metadata.paper_type
 
     synthesis_input = SynthesisInput(
         metadata=metadata,

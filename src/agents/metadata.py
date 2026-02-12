@@ -19,6 +19,8 @@ Critical:
 - For `journal`, extract the true publication venue (journal, preprint server, or source website).
 - Do NOT default to "Scientific Data" unless explicitly supported by the paper or tool evidence.
 - If venue is unclear from markdown, call tools to validate DOI/PMID and venue.
+- Classify `paper_type` as one of: experimental, dataset_descriptor, review, methods, meta_analysis, commentary.
+- Extract `license` when present (dataset/paper/code usage rights).
 - Return `keywords` as a list (possibly empty), never null.
 
 Field/subfield taxonomy (must use only these values):

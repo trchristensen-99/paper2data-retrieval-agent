@@ -31,7 +31,7 @@ HTML_PAGE = """<!doctype html>
     .card .k { color: #5a6778; font-size: 12px; }
     .card .v { font-size: 21px; font-weight: 700; }
     .filters { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 8px; margin-bottom: 8px; }
-    .filters.advanced { grid-template-columns: repeat(5, minmax(120px, 1fr)); display: none; }
+    .filters.advanced { grid-template-columns: repeat(6, minmax(120px, 1fr)); display: none; }
     .filters.advanced.show { display: grid; }
     input, select, button { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff; }
     button { background: var(--accent); color: #fff; border-color: var(--accent); cursor: pointer; }
@@ -77,6 +77,7 @@ HTML_PAGE = """<!doctype html>
     </div>
     <div class=\"muted\"><label><input type=\"checkbox\" id=\"show_advanced\" /> Show advanced filters</label></div>
     <div class=\"filters advanced\" id=\"advanced_filters\">
+      <select id=\"paper_type\"><option value=\"\">All paper types</option></select>
       <select id=\"repo\"><option value=\"\">All repositories</option></select>
       <select id=\"status\"><option value=\"\">All availability</option></select>
       <select id=\"assay\"><option value=\"\">All assay types</option></select>
@@ -156,16 +157,18 @@ HTML_PAGE = """<!doctype html>
       const results = record.results || {};
       const dataAvailability = record.data_availability || {};
       const accessions = Array.isArray(record.data_accessions) ? record.data_accessions : [];
-      const quant = Array.isArray(results.quantitative_findings) ? results.quantitative_findings : [];
+      const experimental = Array.isArray(results.experimental_findings) ? results.experimental_findings : [];
 
       return {
         overview: [
           ['Title', metadata.title || ''],
           ['Authors', valueToText(metadata.authors || [])],
+          ['Paper Type', metadata.paper_type || (results.paper_type || '')],
           ['Journal/Venue', metadata.journal || ''],
           ['Publication Date', metadata.publication_date || ''],
           ['DOI', metadata.doi || ''],
           ['PMID', metadata.pmid || ''],
+          ['License', metadata.license || ''],
           ['Field', metadata.category || ''],
           ['Subfield', metadata.subcategory || ''],
           ['Confidence', Number(record.extraction_confidence || 0).toFixed(2)],
@@ -185,9 +188,12 @@ HTML_PAGE = """<!doctype html>
           ['Methods Completeness', methods.methods_completeness || ''],
         ],
         results: [
+          ['Result Mode', results.paper_type || metadata.paper_type || ''],
           ['Spin Assessment', results.spin_assessment || ''],
-          ['Qualitative Findings Count', Array.isArray(results.qualitative_findings) ? results.qualitative_findings.length : 0],
-          ['Quantitative Findings Count', quant.length],
+          ['Synthesized Claims Count', Array.isArray(results.synthesized_claims) ? results.synthesized_claims.length : 0],
+          ['Experimental Findings Count', experimental.length],
+          ['Dataset Properties Count', Array.isArray(results.dataset_properties) ? results.dataset_properties.length : 0],
+          ['Method Benchmarks Count', Array.isArray(results.method_benchmarks) ? results.method_benchmarks.length : 0],
         ],
         data: [
           ['Availability Status', dataAvailability.overall_status || ''],
@@ -223,7 +229,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     function renderFindingsTable(record) {
-      const findings = ((record.results || {}).quantitative_findings || []);
+      const findings = ((record.results || {}).experimental_findings || []);
       const q = detailFilter.trim().toLowerCase();
       const filtered = findings.filter(f => {
         if (!q) return true;
@@ -231,7 +237,7 @@ HTML_PAGE = """<!doctype html>
           f.claim, f.metric, f.value, f.effect_size, f.confidence_interval, f.p_value, f.context, f.confidence
         ].map(valueToText).join(' ').toLowerCase().includes(q);
       });
-      if (!filtered.length) return '<div class=\"muted\">No matching quantitative findings.</div>';
+      if (!filtered.length) return '<div class=\"muted\">No matching experimental findings.</div>';
       return `
         <div class=\"subtable-wrap\">
           <table class=\"subtable\">
@@ -256,13 +262,65 @@ HTML_PAGE = """<!doctype html>
       `;
     }
 
+    function renderDatasetPropertiesTable(record) {
+      const props = ((record.results || {}).dataset_properties || []);
+      const q = detailFilter.trim().toLowerCase();
+      const filtered = props.filter(p => {
+        if (!q) return true;
+        return [p.property, p.value, p.context].map(valueToText).join(' ').toLowerCase().includes(q);
+      });
+      if (!filtered.length) return '<div class=\"muted\">No matching dataset properties.</div>';
+      return `
+        <div class=\"subtable-wrap\">
+          <table class=\"subtable\">
+            <thead><tr><th>#</th><th>Property</th><th>Value</th><th>Context</th></tr></thead>
+            <tbody>
+              ${filtered.map((p, i) => `<tr>
+                <td>${i + 1}</td>
+                <td>${escapeHtml(valueToText(p.property))}</td>
+                <td>${escapeHtml(valueToText(p.value))}</td>
+                <td>${escapeHtml(valueToText(p.context))}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderMethodBenchmarksTable(record) {
+      const rows = ((record.results || {}).method_benchmarks || []);
+      const q = detailFilter.trim().toLowerCase();
+      const filtered = rows.filter(b => {
+        if (!q) return true;
+        return [b.task, b.metric, b.value, b.baseline, b.context].map(valueToText).join(' ').toLowerCase().includes(q);
+      });
+      if (!filtered.length) return '<div class=\"muted\">No matching method benchmarks.</div>';
+      return `
+        <div class=\"subtable-wrap\">
+          <table class=\"subtable\">
+            <thead><tr><th>#</th><th>Task</th><th>Metric</th><th>Value</th><th>Baseline</th><th>Context</th></tr></thead>
+            <tbody>
+              ${filtered.map((b, i) => `<tr>
+                <td>${i + 1}</td>
+                <td>${escapeHtml(valueToText(b.task))}</td>
+                <td>${escapeHtml(valueToText(b.metric))}</td>
+                <td>${escapeHtml(valueToText(b.value))}</td>
+                <td>${escapeHtml(valueToText(b.baseline))}</td>
+                <td>${escapeHtml(valueToText(b.context))}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
     function renderAccessionsTable(record) {
       const accessions = record.data_accessions || [];
       const q = detailFilter.trim().toLowerCase();
       const filtered = accessions.filter(a => {
         if (!q) return true;
         return [
-          a.repository, a.accession_id, a.url, a.file_count, a.is_accessible, a.description
+          a.repository, a.accession_id, a.url, a.category, a.data_format, a.file_count, a.is_accessible, a.description
         ].map(valueToText).join(' ').toLowerCase().includes(q);
       });
       if (!filtered.length) return '<div class=\"muted\">No matching accessions.</div>';
@@ -270,7 +328,7 @@ HTML_PAGE = """<!doctype html>
         <div class=\"subtable-wrap\">
           <table class=\"subtable\">
             <thead>
-              <tr><th>#</th><th>Repository</th><th>Accession</th><th>URL</th><th>Files</th><th>Accessible</th><th>Description</th></tr>
+              <tr><th>#</th><th>Repository</th><th>Accession</th><th>URL</th><th>Category</th><th>Format</th><th>Files</th><th>Accessible</th><th>Description</th></tr>
             </thead>
             <tbody>
               ${filtered.map((a, i) => `<tr>
@@ -278,6 +336,8 @@ HTML_PAGE = """<!doctype html>
                 <td>${escapeHtml(valueToText(a.repository))}</td>
                 <td>${escapeHtml(valueToText(a.accession_id))}</td>
                 <td>${escapeHtml(valueToText(a.url))}</td>
+                <td>${escapeHtml(valueToText(a.category))}</td>
+                <td>${escapeHtml(valueToText(a.data_format))}</td>
                 <td>${escapeHtml(valueToText(a.file_count))}</td>
                 <td>${escapeHtml(valueToText(a.is_accessible))}</td>
                 <td>${escapeHtml(valueToText(a.description))}</td>
@@ -289,13 +349,17 @@ HTML_PAGE = """<!doctype html>
     }
 
     function renderResultsTab(record, rows) {
-      const qualitative = ((record.results || {}).qualitative_findings || []);
+      const synthesized = ((record.results || {}).synthesized_claims || []);
       return `
         ${renderDetailTable(rows)}
-        <div class=\"muted\">Qualitative findings</div>
-        ${renderPills(qualitative)}
-        <div class=\"muted\" style=\"margin-top:8px;\">Quantitative findings (filter applies here)</div>
+        <div class=\"muted\">Synthesized claims</div>
+        ${renderPills(synthesized)}
+        <div class=\"muted\" style=\"margin-top:8px;\">Experimental findings (filter applies here)</div>
         ${renderFindingsTable(record)}
+        <div class=\"muted\" style=\"margin-top:8px;\">Dataset properties (filter applies here)</div>
+        ${renderDatasetPropertiesTable(record)}
+        <div class=\"muted\" style=\"margin-top:8px;\">Method benchmarks (filter applies here)</div>
+        ${renderMethodBenchmarksTable(record)}
       `;
     }
 
@@ -375,6 +439,7 @@ HTML_PAGE = """<!doctype html>
       fillOptions('journal', facets.journals.map(j => ({name: j.journal === 'Unknown' ? '' : j.journal, count: j.count})).filter(x => x.name), 'All journals');
       fillOptions('repo', facets.repositories, 'All repositories');
       fillOptions('status', facets.data_statuses || [], 'All availability');
+      fillOptions('paper_type', facets.paper_types || [], 'All paper types');
       fillOptions('assay', facets.assay_types || [], 'All assay types');
       fillOptions('organism', facets.organisms || [], 'All organisms');
       fillOptions('field', facets.fields || facets.field_domains || [], 'All fields');
@@ -387,6 +452,7 @@ HTML_PAGE = """<!doctype html>
       const field = document.getElementById('field').value;
       const subfield = document.getElementById('subfield').value;
       const journal = document.getElementById('journal').value;
+      const paperType = document.getElementById('paper_type').value;
       const repo = document.getElementById('repo').value;
       const status = document.getElementById('status').value;
       const assay = document.getElementById('assay').value;
@@ -397,6 +463,7 @@ HTML_PAGE = """<!doctype html>
       if (field) params.set('field_domain', field);
       if (subfield) params.set('subfield', subfield);
       if (journal) params.set('journal', journal);
+      if (paperType) params.set('paper_type', paperType);
       if (repo) params.set('repository', repo);
       if (status) params.set('data_status', status);
       if (assay) params.set('assay', assay);
@@ -532,6 +599,7 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/papers":
             q = params.get("q", [""])[0]
             journal = params.get("journal", [""])[0] or None
+            paper_type = params.get("paper_type", [""])[0] or None
             repository = params.get("repository", [""])[0] or None
             data_status = params.get("data_status", [""])[0] or None
             assay_type = params.get("assay", [""])[0] or None
@@ -558,6 +626,7 @@ class _Handler(BaseHTTPRequestHandler):
             rows = self.db.list_papers(
                 q=q,
                 journal=journal,
+                paper_type=paper_type,
                 repository=repository,
                 assay_type=assay_type,
                 organism=organism,

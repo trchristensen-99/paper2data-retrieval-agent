@@ -71,8 +71,15 @@ def fallback_synthesis(payload: SynthesisInput) -> SynthesisOutput:
             "## Key Quantitative Findings",
             *[
                 f"- {f.claim} | {f.metric}: {f.value}"
-                for f in payload.results.quantitative_findings
+                for f in payload.results.experimental_findings
             ],
+            "## Dataset Properties",
+            *[
+                f"- {p.property}: {p.value} ({p.context})"
+                for p in payload.results.dataset_properties
+            ],
+            "## Synthesized Claims",
+            *[f"- {c}" for c in payload.results.synthesized_claims],
             "",
             "## Data Availability",
             f"Overall status: {payload.data_availability.overall_status}",

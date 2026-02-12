@@ -6,9 +6,11 @@ from src.agents import manager
 from src.schemas.models import (
     DataAccession,
     DataAvailabilityReport,
+    DescriptiveStat,
     Finding,
     FigureSummary,
     MetadataRecord,
+    MethodBenchmark,
     MethodsSummary,
     PaperRecord,
     ResultsSummary,
@@ -36,11 +38,10 @@ def test_methods_summary_shape() -> None:
 
 def test_results_summary_shape() -> None:
     summary = ResultsSummary(
-        quantitative_findings=[],
-        qualitative_findings=["Signal present in treated cohort"],
-        spin_assessment="mostly aligned",
+        paper_type="review",
+        synthesized_claims=["Signal present in treated cohort"],
     )
-    assert summary.spin_assessment
+    assert summary.synthesized_claims
 
 
 def test_data_availability_values() -> None:
@@ -70,9 +71,10 @@ async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) 
             methods_completeness="sufficient",
         )
 
-    async def _results(_: str) -> ResultsSummary:
+    async def _results(_: str, paper_type: str | None = None, guidance: str | None = None) -> ResultsSummary:
         return ResultsSummary(
-            quantitative_findings=[
+            paper_type=paper_type or "experimental",
+            experimental_findings=[
                 Finding(
                     claim="Gene X increased in treated samples",
                     metric="log2 fold change",
@@ -82,16 +84,19 @@ async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) 
                     confidence=0.8,
                 )
             ],
-            qualitative_findings=["Primary pattern is treatment-associated increase."],
+            dataset_properties=[DescriptiveStat(property="n_records", value="6", context="demo")],
+            synthesized_claims=["Primary pattern is treatment-associated increase."],
+            method_benchmarks=[MethodBenchmark(task="demo", metric="acc", value="0.9", context="test")],
             key_figures=[FigureSummary(figure_id="Fig1", description="Volcano plot", key_findings=["Gene X up"])],
             spin_assessment="aligned",
         )
 
-    async def _data(_: str):
+    async def _data(_: str, paper_type: str | None = None, guidance: str | None = None):
         class _Out:
             data_accessions = [
                 DataAccession(
                     accession_id="GSE00001",
+                    category="supplementary_data",
                     repository="GEO",
                     description="RNA-seq cohort",
                     is_accessible=True,

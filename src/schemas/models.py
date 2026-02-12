@@ -3,11 +3,21 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-class Finding(BaseModel):
-    """A single quantitative or qualitative finding from the paper."""
+PAPER_TYPES = {
+    "experimental",
+    "dataset_descriptor",
+    "review",
+    "methods",
+    "meta_analysis",
+    "commentary",
+}
+
+
+class ExperimentalFinding(BaseModel):
+    """A single quantitative result for experimental-style reporting."""
 
     claim: str = Field(description="The factual claim, stripped of narrative spin")
     metric: str = Field(description="What was measured")
@@ -15,10 +25,15 @@ class Finding(BaseModel):
     confidence_interval: Optional[str] = Field(default=None)
     p_value: Optional[str] = Field(default=None)
     effect_size: Optional[str] = Field(default=None)
+    comparison: Optional[str] = Field(default=None)
     context: str = Field(description="Experimental context for this finding")
     confidence: float = Field(
         description="Agent confidence in extraction accuracy, 0-1", ge=0.0, le=1.0
     )
+
+
+class Finding(ExperimentalFinding):
+    """Backward-compatible alias for older code paths."""
 
 
 class FigureSummary(BaseModel):
@@ -27,17 +42,43 @@ class FigureSummary(BaseModel):
     key_findings: list[str]
 
 
+class DescriptiveStat(BaseModel):
+    property: str = Field(description="Dataset/review descriptive property name")
+    value: str = Field(description="Value for this descriptive property")
+    context: str = Field(description="Context/notes for the property")
+
+
+class MethodBenchmark(BaseModel):
+    task: str
+    metric: str
+    value: str
+    baseline: Optional[str] = None
+    context: str
+
+
 class DataAccession(BaseModel):
     accession_id: str
+    category: str = Field(
+        default="external_reference",
+        description="primary_dataset | supplementary_data | external_reference",
+    )
     repository: str
     url: Optional[str] = None
     description: str
+    data_format: Optional[str] = None
     is_accessible: Optional[bool] = None
     file_count: Optional[int] = None
     files_listed: Optional[list[str]] = None
     total_size_bytes: Optional[int] = None
     estimated_download_seconds: Optional[float] = None
     download_probe_url: Optional[str] = None
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _norm_category(cls, value):
+        v = str(value or "").strip().lower()
+        allowed = {"primary_dataset", "supplementary_data", "external_reference"}
+        return v if v in allowed else "external_reference"
 
 
 class DataAvailabilityReport(BaseModel):
@@ -85,6 +126,11 @@ class MetadataRecord(BaseModel):
     keywords: list[str] = []
     funding_sources: list[str] = []
     conflicts_of_interest: Optional[str] = None
+    paper_type: Optional[str] = Field(
+        default=None,
+        description="experimental|dataset_descriptor|review|methods|meta_analysis|commentary",
+    )
+    license: Optional[str] = None
     category: Optional[str] = Field(
         default=None,
         description="Fixed top-level field (e.g., biology, chemistry, physics, computer_science, mathematics_statistics, social_science, interdisciplinary)",
@@ -99,20 +145,67 @@ class MetadataRecord(BaseModel):
     def _none_to_list(cls, value):
         return [] if value is None else value
 
+    @field_validator("paper_type", mode="before")
+    @classmethod
+    def _norm_paper_type(cls, value):
+        v = str(value or "").strip().lower()
+        return v if v in PAPER_TYPES else None
+
 
 class ResultsSummary(BaseModel):
-    quantitative_findings: list[Finding]
-    qualitative_findings: list[str]
+    paper_type: Optional[str] = None
+    experimental_findings: list[ExperimentalFinding] = []
+    dataset_properties: list[DescriptiveStat] = []
+    synthesized_claims: list[str] = []
+    method_benchmarks: list[MethodBenchmark] = []
     key_figures: list[FigureSummary] = []
-    spin_assessment: str = Field(
-        default="not_assessed",
+    spin_assessment: Optional[str] = Field(
+        default=None,
         description="Brief note on whether author claims match the raw data"
     )
 
-    @field_validator("quantitative_findings", "qualitative_findings", "key_figures", mode="before")
+    @field_validator(
+        "experimental_findings",
+        "dataset_properties",
+        "synthesized_claims",
+        "method_benchmarks",
+        "key_figures",
+        mode="before",
+    )
     @classmethod
     def _none_to_list(cls, value):
         return [] if value is None else value
+
+    @field_validator("paper_type", mode="before")
+    @classmethod
+    def _norm_result_paper_type(cls, value):
+        v = str(value or "").strip().lower()
+        return v if v in PAPER_TYPES else None
+
+    @field_validator("spin_assessment", mode="before")
+    @classmethod
+    def _clean_spin(cls, value):
+        if value is None:
+            return None
+        v = str(value).strip()
+        if not v or v.lower() in {"not_assessed", "not provided", "n/a", "none"}:
+            return None
+        return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_result_shape(cls, data):
+        if not isinstance(data, dict):
+            return data
+        if "experimental_findings" not in data and "quantitative_findings" in data:
+            data["experimental_findings"] = data.get("quantitative_findings")
+        if "synthesized_claims" not in data and "qualitative_findings" in data:
+            data["synthesized_claims"] = data.get("qualitative_findings")
+        if "paper_type" not in data:
+            data["paper_type"] = None
+        data.setdefault("dataset_properties", [])
+        data.setdefault("method_benchmarks", [])
+        return data
 
 
 class PaperRecord(BaseModel):
