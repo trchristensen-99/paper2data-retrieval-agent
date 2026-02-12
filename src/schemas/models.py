@@ -104,3 +104,16 @@ class SynthesisOutput(BaseModel):
     record: PaperRecord
     retrieval_report_markdown: str
     retrieval_log_markdown: str
+
+
+class RetryInstruction(BaseModel):
+    agent_name: str
+    reason: str
+
+
+class QualityCheckOutput(BaseModel):
+    missing_fields: list[str]
+    suspicious_empty_fields: list[str]
+    should_retry: bool
+    retry_instructions: list[RetryInstruction] = []
+    notes: str

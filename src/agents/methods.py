@@ -25,10 +25,16 @@ methods_agent = Agent(
 )
 
 
-async def run_methods_agent(paper_markdown: str) -> MethodsSummary:
+async def run_methods_agent(paper_markdown: str, guidance: str | None = None) -> MethodsSummary:
     log_event("agent.methods.start", {"chars": len(paper_markdown)})
+    agent_input = paper_markdown
+    if guidance:
+        agent_input = (
+            f"{paper_markdown}\n\n"
+            f"[QUALITY_REPAIR_INSTRUCTION]\n{guidance}\n"
+        )
     result = await run_with_rate_limit_retry(
-        lambda: Runner.run(methods_agent, input=paper_markdown)
+        lambda: Runner.run(methods_agent, input=agent_input)
     )
     output = result.final_output
     if not isinstance(output, MethodsSummary):

@@ -37,10 +37,18 @@ data_availability_agent = Agent(
 )
 
 
-async def run_data_availability_agent(paper_markdown: str) -> DataAvailabilityOutput:
+async def run_data_availability_agent(
+    paper_markdown: str, guidance: str | None = None
+) -> DataAvailabilityOutput:
     log_event("agent.data_availability.start", {"chars": len(paper_markdown)})
+    agent_input = paper_markdown
+    if guidance:
+        agent_input = (
+            f"{paper_markdown}\n\n"
+            f"[QUALITY_REPAIR_INSTRUCTION]\n{guidance}\n"
+        )
     result = await run_with_rate_limit_retry(
-        lambda: Runner.run(data_availability_agent, input=paper_markdown)
+        lambda: Runner.run(data_availability_agent, input=agent_input)
     )
     output = result.final_output
     if not isinstance(output, DataAvailabilityOutput):

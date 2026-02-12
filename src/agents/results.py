@@ -25,10 +25,16 @@ results_agent = Agent(
 )
 
 
-async def run_results_agent(paper_markdown: str) -> ResultsSummary:
+async def run_results_agent(paper_markdown: str, guidance: str | None = None) -> ResultsSummary:
     log_event("agent.results.start", {"chars": len(paper_markdown)})
+    agent_input = paper_markdown
+    if guidance:
+        agent_input = (
+            f"{paper_markdown}\n\n"
+            f"[QUALITY_REPAIR_INSTRUCTION]\n{guidance}\n"
+        )
     result = await run_with_rate_limit_retry(
-        lambda: Runner.run(results_agent, input=paper_markdown)
+        lambda: Runner.run(results_agent, input=agent_input)
     )
     output = result.final_output
     if not isinstance(output, ResultsSummary):

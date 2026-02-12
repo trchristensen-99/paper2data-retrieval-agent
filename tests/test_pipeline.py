@@ -125,10 +125,21 @@ async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) 
             retrieval_log_markdown="# Retrieval Log",
         )
 
+    class _QC:
+        should_retry = False
+        retry_instructions = []
+        missing_fields = []
+        suspicious_empty_fields = []
+        notes = "No issues detected"
+
+    async def _quality(*args, **kwargs):
+        return _QC()
+
     monkeypatch.setattr(manager, "run_metadata_agent", _metadata)
     monkeypatch.setattr(manager, "run_methods_agent", _methods)
     monkeypatch.setattr(manager, "run_results_agent", _results)
     monkeypatch.setattr(manager, "run_data_availability_agent", _data)
+    monkeypatch.setattr(manager, "run_quality_control_agent", _quality)
     monkeypatch.setattr(manager, "run_synthesis_agent", _synthesis)
 
     artifacts = await manager.run_pipeline("paper body")

@@ -20,10 +20,16 @@ metadata_agent = Agent(
 )
 
 
-async def run_metadata_agent(paper_markdown: str) -> MetadataRecord:
+async def run_metadata_agent(paper_markdown: str, guidance: str | None = None) -> MetadataRecord:
     log_event("agent.metadata.start", {"chars": len(paper_markdown)})
+    agent_input = paper_markdown
+    if guidance:
+        agent_input = (
+            f"{paper_markdown}\n\n"
+            f"[QUALITY_REPAIR_INSTRUCTION]\n{guidance}\n"
+        )
     result = await run_with_rate_limit_retry(
-        lambda: Runner.run(metadata_agent, input=paper_markdown)
+        lambda: Runner.run(metadata_agent, input=agent_input)
     )
     output = result.final_output
     if not isinstance(output, MetadataRecord):

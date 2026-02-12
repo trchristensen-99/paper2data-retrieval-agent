@@ -7,6 +7,7 @@ class ModelConfig:
     methods: str = "gpt-4.1"
     results: str = "gpt-4.1"
     data_availability: str = "gpt-4.1"
+    quality: str = "gpt-4.1-mini"
     synthesis: str = "gpt-4.1"
     manager: str = "gpt-4.1-mini"
 

@@ -12,6 +12,7 @@ from src.agents.data_availability import (
 )
 from src.agents.metadata import metadata_agent, run_metadata_agent
 from src.agents.methods import methods_agent, run_methods_agent
+from src.agents.quality_control import quality_control_agent, run_quality_control_agent
 from src.agents.results import results_agent, run_results_agent
 from src.agents.synthesis import fallback_synthesis, run_synthesis_agent, synthesis_agent
 from src.schemas.models import PaperRecord, SynthesisInput, SynthesisOutput
@@ -26,7 +27,14 @@ manager_agent = Agent(
         "You orchestrate handoffs across metadata -> methods -> results -> "
         "data_availability -> synthesis."
     ),
-    handoffs=[metadata_agent, methods_agent, results_agent, data_availability_agent, synthesis_agent],
+    handoffs=[
+        metadata_agent,
+        methods_agent,
+        results_agent,
+        data_availability_agent,
+        quality_control_agent,
+        synthesis_agent,
+    ],
 )
 
 
@@ -41,6 +49,7 @@ class PipelineArtifacts:
     retrieval_log_markdown: str
     step_timings_seconds: dict[str, float]
     pipeline_duration_seconds: float
+    quality_notes: str | None = None
 
 
 async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
@@ -77,6 +86,41 @@ async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
     )
     _print_step_timing("data_availability", step_timings_seconds["data_availability"])
 
+    step_start = perf_counter()
+    quality_check = await run_quality_control_agent(
+        paper_markdown=paper_markdown,
+        metadata=metadata,
+        methods=methods,
+        results=results,
+        data_availability=data_availability.data_availability,
+    )
+    step_timings_seconds["quality_control"] = perf_counter() - step_start
+    log_event("pipeline.step_timing", {"step": "quality_control", "seconds": step_timings_seconds["quality_control"]})
+    _print_step_timing("quality_control", step_timings_seconds["quality_control"])
+
+    if quality_check.should_retry and quality_check.retry_instructions:
+        log_event(
+            "pipeline.quality_retry.start",
+            {
+                "missing_fields": quality_check.missing_fields,
+                "suspicious_empty_fields": quality_check.suspicious_empty_fields,
+                "retry_count": len(quality_check.retry_instructions),
+            },
+        )
+        for instruction in quality_check.retry_instructions:
+            agent_name = instruction.agent_name.strip().lower()
+            reason = instruction.reason
+            if agent_name == "metadata":
+                metadata = await run_metadata_agent(paper_markdown, guidance=reason)
+            elif agent_name == "methods":
+                methods = await run_methods_agent(paper_markdown, guidance=reason)
+            elif agent_name == "results":
+                results = await run_results_agent(paper_markdown, guidance=reason)
+            elif agent_name in {"data_availability", "data-availability"}:
+                data_availability = await run_data_availability_agent(paper_markdown, guidance=reason)
+            log_event("pipeline.quality_retry.step", {"agent": agent_name, "reason": reason})
+        log_event("pipeline.quality_retry.end", {"notes": quality_check.notes})
+
     synthesis_input = SynthesisInput(
         metadata=metadata,
         methods=methods,
@@ -110,4 +154,5 @@ async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
         retrieval_log_markdown=synthesis.retrieval_log_markdown,
         step_timings_seconds=step_timings_seconds,
         pipeline_duration_seconds=pipeline_duration_seconds,
+        quality_notes=quality_check.notes,
     )

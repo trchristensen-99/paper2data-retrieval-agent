@@ -48,6 +48,7 @@ async def _run(args: argparse.Namespace) -> dict[str, str]:
             {
                 "step_timings_seconds": artifacts.step_timings_seconds,
                 "pipeline_duration_seconds": artifacts.pipeline_duration_seconds,
+                "quality_notes": artifacts.quality_notes,
             },
             indent=2,
         ),
