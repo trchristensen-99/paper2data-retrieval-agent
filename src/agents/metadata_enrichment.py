@@ -5,7 +5,7 @@ import json
 from agents import Agent, AgentOutputSchema, Runner
 
 from src.schemas.models import MetadataEnrichmentOutput, MetadataRecord
-from src.tools.biblio_tools import search_crossref_by_title, search_pubmed
+from src.tools.biblio_tools import search_crossref_by_doi, search_crossref_by_title, search_pubmed
 from src.utils.config import MODELS
 from src.utils.logging import log_event
 from src.utils.retry import run_with_rate_limit_retry
@@ -15,6 +15,7 @@ Primary targets: DOI, PMID, and publication venue (journal/preprint/source websi
 
 Rules:
 - Prefer exact title matches.
+- If DOI is present, call `search_crossref_by_doi` first and use that venue/date as primary evidence.
 - Trust Crossref venue only when `is_high_confidence_match=true` (or exact DOI match).
 - If Crossref/PubMed evidence conflicts with extracted journal, prefer evidence-backed venue.
 - If uncertain, leave fields null and explain uncertainty in notes.
@@ -25,7 +26,7 @@ metadata_enrichment_agent = Agent(
     name="metadata_enrichment_agent",
     model=MODELS.metadata_enrichment,
     instructions=ENRICHMENT_PROMPT,
-    tools=[search_crossref_by_title, search_pubmed],
+    tools=[search_crossref_by_doi, search_crossref_by_title, search_pubmed],
     output_type=AgentOutputSchema(MetadataEnrichmentOutput, strict_json_schema=False),
 )
 

@@ -5,7 +5,7 @@ import json
 from agents import Agent, AgentOutputSchema, Runner
 
 from src.schemas.models import MetadataRecord
-from src.tools.biblio_tools import search_crossref_by_title, search_pubmed
+from src.tools.biblio_tools import search_crossref_by_doi, search_crossref_by_title, search_pubmed
 from src.utils.config import MODELS
 from src.utils.logging import log_event
 from src.utils.retry import run_with_rate_limit_retry
@@ -29,7 +29,7 @@ metadata_agent = Agent(
     name="metadata_agent",
     model=MODELS.metadata,
     instructions=METADATA_PROMPT,
-    tools=[search_crossref_by_title, search_pubmed],
+    tools=[search_crossref_by_doi, search_crossref_by_title, search_pubmed],
     output_type=AgentOutputSchema(MetadataRecord, strict_json_schema=False),
 )
 

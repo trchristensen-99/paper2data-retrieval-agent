@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
+from urllib.parse import quote
 
 import httpx
 from agents import function_tool
@@ -82,4 +83,44 @@ async def search_pubmed(title_or_doi: str) -> dict:
         result["error"] = str(exc)
 
     log_event("tool.search_pubmed", result)
+    return result
+
+
+@function_tool
+async def search_crossref_by_doi(doi: str) -> dict:
+    """Lookup Crossref metadata for an exact DOI."""
+    result = {
+        "doi_query": doi,
+        "doi": None,
+        "journal": None,
+        "publication_date": None,
+        "publisher": None,
+        "matched_title": None,
+        "error": None,
+    }
+    try:
+        safe_doi = quote(doi.strip(), safe="")
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(f"https://api.crossref.org/works/{safe_doi}")
+            resp.raise_for_status()
+            message = resp.json().get("message", {})
+            result["doi"] = message.get("DOI")
+            titles = message.get("title") or []
+            if titles:
+                result["matched_title"] = titles[0]
+            container = message.get("container-title") or []
+            if container:
+                result["journal"] = container[0]
+            result["publisher"] = message.get("publisher")
+            pub_parts = (
+                message.get("published-print", {}).get("date-parts")
+                or message.get("published-online", {}).get("date-parts")
+                or []
+            )
+            if pub_parts and pub_parts[0]:
+                result["publication_date"] = "-".join(str(x) for x in pub_parts[0])
+    except Exception as exc:  # noqa: BLE001
+        result["error"] = str(exc)
+
+    log_event("tool.search_crossref_by_doi", result)
     return result

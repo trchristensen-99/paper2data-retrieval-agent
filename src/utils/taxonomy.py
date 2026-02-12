@@ -39,6 +39,18 @@ def all_categories_text() -> str:
     return "\n".join(lines)
 
 
+def category_map() -> dict[str, list[str]]:
+    return {k: list(v) for k, v in CATEGORY_SUBCATEGORY.items()}
+
+
+def is_valid_category_subcategory(category: str | None, subcategory: str | None) -> bool:
+    c = (category or "").strip().lower()
+    s = (subcategory or "").strip().lower()
+    if c not in CATEGORY_SUBCATEGORY:
+        return False
+    return s in CATEGORY_SUBCATEGORY[c]
+
+
 def normalize_category_subcategory(
     category: str | None,
     subcategory: str | None,

@@ -26,12 +26,12 @@ HTML_PAGE = """<!doctype html>
     body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; }
     .wrap { max-width: 1240px; margin: 0 auto; padding: 20px; }
     h1 { margin: 0 0 14px; font-size: 24px; }
-    .grid { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; margin-bottom: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 10px; margin-bottom: 16px; }
     .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
     .card .k { color: #5a6778; font-size: 12px; }
     .card .v { font-size: 21px; font-weight: 700; }
-    .filters { display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 8px; margin-bottom: 8px; }
-    .filters.advanced { grid-template-columns: repeat(6, minmax(120px, 1fr)); display: none; }
+    .filters { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 8px; margin-bottom: 8px; }
+    .filters.advanced { grid-template-columns: repeat(5, minmax(120px, 1fr)); display: none; }
     .filters.advanced.show { display: grid; }
     input, select, button { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff; }
     button { background: var(--accent); color: #fff; border-color: var(--accent); cursor: pointer; }
@@ -54,17 +54,17 @@ HTML_PAGE = """<!doctype html>
   <div class=\"wrap\">
     <h1>Paper2Data Terminal</h1>
     <div class=\"grid\" id=\"summary\"></div>
-    <div class=\"muted\">Use optional advanced filters for domain-specific narrowing.</div>
+    <div class=\"muted\">Use field/subcategory in main filters. Repositories and assay-level filters are in advanced filters.</div>
     <div class=\"filters\">
       <input id=\"q\" placeholder=\"Search title, DOI, methods, findings...\" />
+      <select id=\"field\"><option value=\"\">All fields</option></select>
+      <select id=\"subcategory\"><option value=\"\">All subcategories</option></select>
       <select id=\"journal\"><option value=\"\">All journals</option></select>
-      <select id=\"repo\"><option value=\"\">All repositories</option></select>
       <button id=\"run\">Run</button>
     </div>
     <div class=\"muted\"><label><input type=\"checkbox\" id=\"show_advanced\" /> Show advanced filters</label></div>
     <div class=\"filters advanced\" id=\"advanced_filters\">
-      <select id=\"field\"><option value=\"\">All fields</option></select>
-      <select id=\"subcategory\"><option value=\"\">All subcategories</option></select>
+      <select id=\"repo\"><option value=\"\">All repositories</option></select>
       <select id=\"status\"><option value=\"\">All availability</option></select>
       <select id=\"assay\"><option value=\"\">All assay types</option></select>
       <select id=\"organism\"><option value=\"\">All organisms</option></select>
@@ -89,9 +89,11 @@ HTML_PAGE = """<!doctype html>
   <script>
     let sortBy = 'updated_at';
     let sortDir = 'desc';
+    let categorySubcategories = {};
 
     function fillOptions(id, items, placeholder) {
       const el = document.getElementById(id);
+      el.innerHTML = '';
       if (!el.multiple) {
         const base = document.createElement('option');
         base.value = '';
@@ -106,13 +108,23 @@ HTML_PAGE = """<!doctype html>
       });
     }
 
+    function fillSubcategoryOptions() {
+      const field = document.getElementById('field').value;
+      const list = field && categorySubcategories[field] ? categorySubcategories[field] : [];
+      const selected = document.getElementById('subcategory').value;
+      fillOptions('subcategory', list, 'All subcategories');
+      if (list.some(x => x.name === selected)) {
+        document.getElementById('subcategory').value = selected;
+      }
+    }
+
     async function loadSummary() {
       const [statsRes, facetsRes] = await Promise.all([fetch('/api/summary'), fetch('/api/facets')]);
       const stats = await statsRes.json();
       const facets = await facetsRes.json();
+      categorySubcategories = facets.category_subcategories || {};
       document.getElementById('summary').innerHTML = [
         ['Papers', stats.papers],
-        ['Paper Sources', stats.total_sources],
         ['DB Path', stats.db_path]
       ].map(([k,v]) => `<div class=\"card\"><div class=\"k\">${k}</div><div class=\"v\">${v}</div></div>`).join('');
 
@@ -122,7 +134,7 @@ HTML_PAGE = """<!doctype html>
       fillOptions('assay', facets.assay_types || [], 'All assay types');
       fillOptions('organism', facets.organisms || [], 'All organisms');
       fillOptions('field', facets.field_domains || [], 'All fields');
-      fillOptions('subcategory', facets.subcategories || [], 'All subcategories');
+      fillSubcategoryOptions();
     }
 
     async function runQuery() {
@@ -165,7 +177,10 @@ HTML_PAGE = """<!doctype html>
 
       rows.forEach(row => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${row.title || ''}</td><td>${row.journal || ''}</td><td>${row.publication_date || ''}</td><td>${(row.extraction_confidence ?? '').toString()}</td>`;
+        const conf = row.extraction_confidence === null || row.extraction_confidence === undefined
+          ? ''
+          : Number(row.extraction_confidence).toFixed(2);
+        tr.innerHTML = `<td>${row.title || ''}</td><td>${row.journal || ''}</td><td>${row.publication_date || ''}</td><td>${conf}</td>`;
         tr.onclick = async () => {
           const detailRes = await fetch('/api/paper/' + row.paper_id);
           const detail = await detailRes.json();
@@ -209,9 +224,11 @@ HTML_PAGE = """<!doctype html>
 
     document.getElementById('run').onclick = runQuery;
     document.getElementById('field').onchange = () => {
+      fillSubcategoryOptions();
       applyFieldBehavior();
       runQuery();
     };
+    document.getElementById('subcategory').onchange = runQuery;
     document.getElementById('show_advanced').onchange = (ev) => {
       const panel = document.getElementById('advanced_filters');
       panel.classList.toggle('show', ev.target.checked);

@@ -24,7 +24,7 @@ from src.schemas.models import DataAvailabilityReport, PaperRecord, SynthesisInp
 from src.utils.config import MODELS
 from src.utils.confidence import compute_extraction_confidence
 from src.utils.logging import log_event, reset_events
-from src.utils.taxonomy import normalize_category_subcategory
+from src.utils.taxonomy import is_valid_category_subcategory, normalize_category_subcategory
 
 
 manager_agent = Agent(
@@ -66,6 +66,17 @@ def _extract_year_hint(text: str) -> str | None:
             return m.group(1)
     years = re.findall(r"\b(19[0-9]{2}|20[0-9]{2})\b", text)
     return years[-1] if years else None
+
+
+def _normalize_venue_name(journal: str | None) -> str | None:
+    if journal is None:
+        return None
+    value = journal.strip()
+    if not value:
+        return None
+    if value.lower() == "scientific data":
+        return "Nature Scientific Data"
+    return value
 
 
 def _derive_keywords(
@@ -137,9 +148,25 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
 
     step_start = perf_counter()
     metadata = await run_metadata_agent(paper_markdown)
+    if not is_valid_category_subcategory(metadata.category, metadata.subcategory):
+        log_event(
+            "pipeline.taxonomy.flagged_invalid",
+            {
+                "category": metadata.category,
+                "subcategory": metadata.subcategory,
+            },
+        )
+        if not fast_mode:
+            taxonomy_guidance = (
+                "Category/subcategory invalid. Select one exact pair from allowed taxonomy only."
+            )
+            repaired = await run_metadata_agent(paper_markdown, guidance=taxonomy_guidance)
+            metadata.category = repaired.category
+            metadata.subcategory = repaired.subcategory
     metadata.category, metadata.subcategory = normalize_category_subcategory(
         metadata.category, metadata.subcategory
     )
+    metadata.journal = _normalize_venue_name(metadata.journal)
     step_timings_seconds["metadata"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "metadata", "seconds": step_timings_seconds["metadata"]})
     _print_step_timing("metadata", step_timings_seconds["metadata"])
@@ -275,6 +302,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
             metadata.journal = enrichment.journal
         if not metadata.publication_date and enrichment.publication_date:
             metadata.publication_date = enrichment.publication_date
+        metadata.journal = _normalize_venue_name(metadata.journal)
         log_event("pipeline.metadata_enrichment.applied", {"notes": enrichment.notes})
 
     missing_before_repair = _missing_key_metadata_fields(
@@ -291,9 +319,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
             "Prefer precise values; do not leave these as null/empty."
         )
         repaired = await run_metadata_agent(paper_markdown, guidance=guidance)
-        repaired.category, repaired.subcategory = normalize_category_subcategory(
-            repaired.category, repaired.subcategory
-        )
+        repaired.category, repaired.subcategory = normalize_category_subcategory(repaired.category, repaired.subcategory)
         if not metadata.authors and repaired.authors:
             metadata.authors = repaired.authors
         if _is_blank(metadata.journal) and not _is_blank(repaired.journal):
@@ -317,6 +343,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         metadata.authors = ["Unknown author"]
     if _is_blank(metadata.journal):
         metadata.journal = "Unknown venue"
+    metadata.journal = _normalize_venue_name(metadata.journal)
     if _is_blank(metadata.publication_date):
         metadata.publication_date = _extract_year_hint(paper_markdown) or "Unknown"
     if not metadata.keywords:

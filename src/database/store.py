@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from src.database.harmonizer import harmonize_records
 from src.schemas.models import PaperRecord
-from src.utils.taxonomy import normalize_category_subcategory
+from src.utils.taxonomy import CATEGORY_SUBCATEGORY, normalize_category_subcategory
 
 
 def _norm_text(value: str) -> str:
@@ -42,11 +42,20 @@ def _extract_domain(value: str | None) -> str | None:
     return domain or None
 
 
+def _normalize_venue_name(journal: str | None) -> str | None:
+    value = (journal or "").strip()
+    if not value:
+        return None
+    if value.lower() == "scientific data":
+        return "Nature Scientific Data"
+    return value
+
+
 def _infer_venue(record: PaperRecord) -> str:
-    journal = (record.metadata.journal or "").strip()
+    journal = _normalize_venue_name(record.metadata.journal) or ""
     doi_lower = (record.metadata.doi or "").strip().lower()
     if journal:
-        if journal.lower() == "scientific data" and doi_lower and not doi_lower.startswith("10.1038/s41597"):
+        if journal.lower() in {"scientific data", "nature scientific data"} and doi_lower and not doi_lower.startswith("10.1038/s41597"):
             journal = ""
         else:
             return journal
@@ -451,7 +460,7 @@ class PaperDatabase:
         rows = self.conn.execute(
             """
             SELECT p.paper_id, p.title, p.doi, p.pmid, p.journal, p.publication_date,
-                   p.extraction_confidence, p.source_count
+                   ROUND(p.extraction_confidence, 2) AS extraction_confidence, p.source_count
               FROM papers p
               LEFT JOIN paper_search s ON s.paper_id = p.paper_id
              WHERE p.title LIKE ?
@@ -546,7 +555,7 @@ class PaperDatabase:
         rows = self.conn.execute(
             f"""
             SELECT p.paper_id, p.title, p.doi, p.pmid, p.journal, p.publication_date,
-                   p.extraction_confidence, p.source_count,
+                   ROUND(p.extraction_confidence, 2) AS extraction_confidence, p.source_count,
                    COALESCE(s.repositories, '') AS repositories,
                    COALESCE(s.assay_types, '') AS assay_types,
                    COALESCE(s.organisms, '') AS organisms,
@@ -623,13 +632,17 @@ class PaperDatabase:
             for key, value in sorted(status_counts.items(), key=lambda item: (-item[1], item[0]))
         ]
         field_domains = [
-            {"name": key, "count": value}
-            for key, value in sorted(field_counts.items(), key=lambda item: (-item[1], item[0]))
+            {"name": key, "count": field_counts.get(key, 0)}
+            for key in CATEGORY_SUBCATEGORY.keys()
         ]
         subcategories = [
             {"name": key, "count": value}
             for key, value in sorted(subcat_counts.items(), key=lambda item: (-item[1], item[0]))
         ]
+        taxonomy = {
+            category: [{"name": sub, "count": subcat_counts.get(sub, 0)} for sub in subcats]
+            for category, subcats in CATEGORY_SUBCATEGORY.items()
+        }
         return {
             "journals": [dict(r) for r in journal_rows],
             "repositories": repositories,
@@ -638,6 +651,7 @@ class PaperDatabase:
             "data_statuses": data_statuses,
             "field_domains": field_domains,
             "subcategories": subcategories,
+            "category_subcategories": taxonomy,
         }
 
     def fetch_paper(self, paper_id: str) -> dict[str, Any] | None:
@@ -697,7 +711,7 @@ class PaperDatabase:
                 reasons.append("missing_authors")
             doi_lower = (record.metadata.doi or "").lower().strip()
             if (
-                (record.metadata.journal or "").strip().lower() == "scientific data"
+                (record.metadata.journal or "").strip().lower() in {"scientific data", "nature scientific data"}
                 and doi_lower
                 and not doi_lower.startswith("10.1038/s41597")
             ):
