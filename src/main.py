@@ -36,19 +36,32 @@ async def _run(args: argparse.Namespace) -> dict[str, str]:
     structured_path = run_dir / "structured_record.json"
     report_path = run_dir / "retrieval_report.md"
     log_path = run_dir / "retrieval_log.md"
+    timings_path = run_dir / "step_timings.json"
 
     structured_path.write_text(
         json.dumps(artifacts.record.model_dump(), indent=2), encoding="utf-8"
     )
     report_path.write_text(artifacts.retrieval_report_markdown, encoding="utf-8")
     log_path.write_text(artifacts.retrieval_log_markdown, encoding="utf-8")
+    timings_path.write_text(
+        json.dumps(
+            {
+                "step_timings_seconds": artifacts.step_timings_seconds,
+                "pipeline_duration_seconds": artifacts.pipeline_duration_seconds,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
     return {
         "structured_record": str(structured_path),
         "retrieval_report": str(report_path),
         "retrieval_log": str(log_path),
+        "step_timings": str(timings_path),
         "confidence": f"{artifacts.record.extraction_confidence:.2f}",
         "title": artifacts.record.metadata.title,
+        "pipeline_duration_seconds": f"{artifacts.pipeline_duration_seconds:.2f}",
     }
 
 
@@ -64,6 +77,8 @@ def main() -> None:
     print(f"Structured record: {summary['structured_record']}")
     print(f"Report: {summary['retrieval_report']}")
     print(f"Retrieval log: {summary['retrieval_log']}")
+    print(f"Step timings: {summary['step_timings']}")
+    print(f"Pipeline duration (s): {summary['pipeline_duration_seconds']}")
 
 
 if __name__ == "__main__":
