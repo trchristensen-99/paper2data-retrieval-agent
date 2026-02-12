@@ -153,6 +153,26 @@ FIELD_SUBFIELD: dict[str, list[str]] = {
     ],
 }
 
+LEGACY_FIELD_MAP: dict[str, str] = {
+    "computational": "data_science_ai",
+    "environmental": "environmental_science",
+    "clinical": "medicine_health",
+    "general_science": "interdisciplinary",
+}
+
+LEGACY_SUBFIELD_MAP: dict[tuple[str, str], str] = {
+    ("computational", "bioinformatics"): "machine_learning",
+    ("computational", "machine_learning"): "machine_learning",
+    ("computational", "data_resource"): "data_resource",
+    ("environmental", "climate"): "general_climate_science",
+    ("environmental", "ecology"): "ecology",
+    ("environmental", "earth_systems"): "general_earth_science",
+    ("clinical", "translational"): "biomedical_research",
+    ("clinical", "epidemiology"): "epidemiology_public_health",
+    ("clinical", "public_health"): "epidemiology_public_health",
+    ("general_science", "uncategorized"): "uncategorized",
+}
+
 
 def all_categories_text() -> str:
     lines: list[str] = []
@@ -179,6 +199,10 @@ def normalize_category_subcategory(
 ) -> tuple[str, str]:
     c = (category or "").strip().lower()
     s = (subcategory or "").strip().lower()
+    if c in LEGACY_FIELD_MAP:
+        mapped = LEGACY_FIELD_MAP[c]
+        mapped_sub = LEGACY_SUBFIELD_MAP.get((c, s), FIELD_SUBFIELD[mapped][0])
+        return mapped, mapped_sub
     if c in FIELD_SUBFIELD:
         if s in FIELD_SUBFIELD[c]:
             return c, s
