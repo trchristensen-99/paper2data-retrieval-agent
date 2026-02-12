@@ -19,6 +19,7 @@ Critical:
 - For `journal`, extract the true publication venue (journal, preprint server, or source website).
 - Do NOT default to "Scientific Data" unless explicitly supported by the paper or tool evidence.
 - If venue is unclear from markdown, call tools to validate DOI/PMID and venue.
+- Return `keywords` as a list (possibly empty), never null.
 
 Category taxonomy (must use only these values):
 """ + all_categories_text() + """

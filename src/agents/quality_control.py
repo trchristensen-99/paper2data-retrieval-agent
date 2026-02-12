@@ -52,6 +52,9 @@ async def run_quality_control_agent(
         "must_review_fields": [
             "metadata.title",
             "metadata.authors",
+            "metadata.journal",
+            "metadata.publication_date",
+            "metadata.keywords",
             "methods.experimental_design",
             "results.quantitative_findings",
             "results.spin_assessment",

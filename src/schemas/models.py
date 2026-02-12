@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Finding(BaseModel):
@@ -47,6 +47,11 @@ class DataAvailabilityReport(BaseModel):
     discrepancies: list[str]
     notes: str
 
+    @field_validator("claimed_repositories", "verified_repositories", "discrepancies", mode="before")
+    @classmethod
+    def _none_to_list(cls, value):
+        return [] if value is None else value
+
 
 class MethodsSummary(BaseModel):
     organisms: list[str]
@@ -58,6 +63,16 @@ class MethodsSummary(BaseModel):
     methods_completeness: str = Field(
         description="Assessment of whether methods are detailed enough to reproduce"
     )
+
+    @field_validator("organisms", "cell_types", "assay_types", "statistical_tests", mode="before")
+    @classmethod
+    def _none_to_list(cls, value):
+        return [] if value is None else value
+
+    @field_validator("sample_sizes", mode="before")
+    @classmethod
+    def _none_to_dict(cls, value):
+        return {} if value is None else value
 
 
 class MetadataRecord(BaseModel):
@@ -79,6 +94,11 @@ class MetadataRecord(BaseModel):
         description="Fixed subcategory within the selected category",
     )
 
+    @field_validator("authors", "keywords", "funding_sources", mode="before")
+    @classmethod
+    def _none_to_list(cls, value):
+        return [] if value is None else value
+
 
 class ResultsSummary(BaseModel):
     quantitative_findings: list[Finding]
@@ -87,6 +107,11 @@ class ResultsSummary(BaseModel):
     spin_assessment: str = Field(
         description="Brief note on whether author claims match the raw data"
     )
+
+    @field_validator("quantitative_findings", "qualitative_findings", "key_figures", mode="before")
+    @classmethod
+    def _none_to_list(cls, value):
+        return [] if value is None else value
 
 
 class PaperRecord(BaseModel):
@@ -101,6 +126,11 @@ class PaperRecord(BaseModel):
     extraction_timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
     agent_version: str = "0.1.0"
     extraction_confidence: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("data_accessions", "code_repositories", mode="before")
+    @classmethod
+    def _none_to_list(cls, value):
+        return [] if value is None else value
 
 
 class SynthesisInput(BaseModel):
