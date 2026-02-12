@@ -128,7 +128,7 @@ class PipelineArtifacts:
     quality_notes: str | None = None
 
 
-async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
+async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> PipelineArtifacts:
     pipeline_start = perf_counter()
     step_timings_seconds: dict[str, float] = {}
 
@@ -157,20 +157,32 @@ async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
     _print_step_timing("results", step_timings_seconds["results"])
 
     step_start = perf_counter()
-    try:
-        data_availability: DataAvailabilityOutput = await run_data_availability_agent(paper_markdown)
-    except Exception as exc:  # noqa: BLE001
-        log_event("agent.data_availability.error", {"error": str(exc)})
+    if fast_mode:
         data_availability = DataAvailabilityOutput(
             data_accessions=[],
             data_availability=DataAvailabilityReport(
                 overall_status="not_checked",
                 claimed_repositories=[],
                 verified_repositories=[],
-                discrepancies=[f"data_availability_agent_error: {exc}"],
-                notes="Data availability agent failed; fallback used.",
+                discrepancies=["fast_mode: data availability deep checks skipped"],
+                notes="Fast mode enabled: data availability checks skipped.",
             ),
         )
+    else:
+        try:
+            data_availability = await run_data_availability_agent(paper_markdown)
+        except Exception as exc:  # noqa: BLE001
+            log_event("agent.data_availability.error", {"error": str(exc)})
+            data_availability = DataAvailabilityOutput(
+                data_accessions=[],
+                data_availability=DataAvailabilityReport(
+                    overall_status="not_checked",
+                    claimed_repositories=[],
+                    verified_repositories=[],
+                    discrepancies=[f"data_availability_agent_error: {exc}"],
+                    notes="Data availability agent failed; fallback used.",
+                ),
+            )
     step_timings_seconds["data_availability"] = perf_counter() - step_start
     log_event(
         "pipeline.step_timing",
@@ -178,19 +190,34 @@ async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
     )
     _print_step_timing("data_availability", step_timings_seconds["data_availability"])
 
-    step_start = perf_counter()
-    quality_check = await run_quality_control_agent(
-        paper_markdown=paper_markdown,
-        metadata=metadata,
-        methods=methods,
-        results=results,
-        data_availability=data_availability.data_availability,
-    )
-    step_timings_seconds["quality_control"] = perf_counter() - step_start
-    log_event("pipeline.step_timing", {"step": "quality_control", "seconds": step_timings_seconds["quality_control"]})
-    _print_step_timing("quality_control", step_timings_seconds["quality_control"])
+    if fast_mode:
+        # Lightweight QC placeholder in fast mode.
+        from src.schemas.models import QualityCheckOutput
 
-    if quality_check.should_retry and quality_check.retry_instructions:
+        quality_check = QualityCheckOutput(
+            missing_fields=[],
+            suspicious_empty_fields=[],
+            should_retry=False,
+            retry_instructions=[],
+            notes="Fast mode: quality-control agent skipped.",
+        )
+    else:
+        step_start = perf_counter()
+        quality_check = await run_quality_control_agent(
+            paper_markdown=paper_markdown,
+            metadata=metadata,
+            methods=methods,
+            results=results,
+            data_availability=data_availability.data_availability,
+        )
+        step_timings_seconds["quality_control"] = perf_counter() - step_start
+        log_event(
+            "pipeline.step_timing",
+            {"step": "quality_control", "seconds": step_timings_seconds["quality_control"]},
+        )
+        _print_step_timing("quality_control", step_timings_seconds["quality_control"])
+
+    if not fast_mode and quality_check.should_retry and quality_check.retry_instructions:
         log_event(
             "pipeline.quality_retry.start",
             {
@@ -222,7 +249,7 @@ async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
         or (not metadata.journal)
         or (metadata.journal.strip().lower() == "scientific data")
     )
-    if needs_enrichment:
+    if not fast_mode and needs_enrichment:
         step_start = perf_counter()
         enrichment = await run_metadata_enrichment_agent(metadata, paper_markdown)
         step_timings_seconds["metadata_enrichment"] = perf_counter() - step_start
@@ -257,7 +284,7 @@ async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
         publication_date=metadata.publication_date,
         keywords=metadata.keywords,
     )
-    if missing_before_repair:
+    if not fast_mode and missing_before_repair:
         guidance = (
             "Repair metadata completeness. Fill these fields with best available evidence from paper text "
             f"and tools: {', '.join(missing_before_repair)}. "

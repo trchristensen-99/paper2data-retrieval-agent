@@ -61,7 +61,7 @@ def _find_markdown_inputs(input_root: Path) -> list[Path]:
     return sorted(input_root.glob("*/data_for_retrieval_agent/*.md"))
 
 
-async def _run_one(input_path: Path, run_root: Path) -> PaperRunSummary:
+async def _run_one(input_path: Path, run_root: Path, fast_mode: bool = False) -> PaperRunSummary:
     paper_id = input_path.stem
     paper_out = run_root / paper_id
     paper_out.mkdir(parents=True, exist_ok=True)
@@ -73,7 +73,7 @@ async def _run_one(input_path: Path, run_root: Path) -> PaperRunSummary:
         artifacts: PipelineArtifacts | None = None
         for attempt in range(1, 4):
             try:
-                artifacts = await run_pipeline(paper_text)
+                artifacts = await run_pipeline(paper_text, fast_mode=fast_mode)
                 break
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
@@ -146,7 +146,7 @@ async def _run_one(input_path: Path, run_root: Path) -> PaperRunSummary:
         )
 
 
-async def _run_batch(input_root: Path, output_root: Path) -> Path:
+async def _run_batch(input_root: Path, output_root: Path, fast_mode: bool = False) -> Path:
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     run_root = output_root / f"batch_{ts}"
     run_root.mkdir(parents=True, exist_ok=True)
@@ -156,7 +156,7 @@ async def _run_batch(input_root: Path, output_root: Path) -> Path:
 
     for idx, path in enumerate(inputs, start=1):
         print(f"[batch] {idx}/{len(inputs)} {path}", flush=True)
-        summary = await _run_one(path, run_root)
+        summary = await _run_one(path, run_root, fast_mode=fast_mode)
         summaries.append(summary)
         print(
             f"[batch] done paper_id={summary.paper_id} status={summary.status} "
@@ -213,6 +213,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path("outputs"),
         help="Directory where batch run artifacts are written",
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Fast mode: skip expensive deep checks (data availability, QC, enrichment/repair retries)",
+    )
     return parser
 
 
@@ -225,7 +230,7 @@ def main() -> None:
             "Try: nslookup api.openai.com, then set DNS to 1.1.1.1 or 8.8.8.8."
         )
     args = _build_parser().parse_args()
-    summary_path = asyncio.run(_run_batch(args.input_root, args.output_root))
+    summary_path = asyncio.run(_run_batch(args.input_root, args.output_root, fast_mode=bool(args.fast)))
     print(f"Batch run complete: {summary_path}")
 
 

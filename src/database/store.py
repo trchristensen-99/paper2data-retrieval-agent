@@ -204,7 +204,12 @@ class PaperDatabase:
 
     def _ensure_column(self, table: str, column: str, sql_type: str) -> None:
         if column not in self._table_columns(table):
-            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
+            try:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
+            except sqlite3.OperationalError as exc:
+                # Another process may have added the same column concurrently.
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
     def _normalize_source_count(self) -> None:
         self.conn.execute("UPDATE papers SET source_count = 1 WHERE source_count IS NULL OR source_count != 1")

@@ -13,6 +13,7 @@ Multi-agent scientific paper retrieval pipeline for the Paper2Data project.
    - `uv sync`
 3. Run pipeline:
    - `uv run python -m src.main ../data_for_agents_example/data_for_retrieval_agent/s41597-021-00905-y.md`
+   - optional faster run: `uv run python -m src.main ../data_for_agents_example/data_for_retrieval_agent/s41597-021-00905-y.md --fast`
 
 If runs fail with `APIConnectionError` / `nodename nor servname provided`:
 - Check DNS: `nslookup api.openai.com`
@@ -65,6 +66,7 @@ You can ingest extraction outputs into a persistent SQLite database that support
   - Includes sortable columns and optional advanced filters for category, subcategory, journal/source venue, repository, data availability status, assay type, organism, and confidence threshold.
 - Compare baseline vs updated batch summaries:
   - `uv run python -m src.compare_batches --baseline <baseline_summary.json> --updated <updated_summary.json>`
+  - optional faster batch run: `uv run python -m src.batch_run --input-root ../data_for_agents_example/data30_final --output-root outputs/reextract_fast --fast`
 
 When a new entry matches an existing paper (by DOI, PMID, or normalized title), records are harmonized using an AI merge agent with deterministic fallback rules.
 - Each canonical paper row represents one paper source (`source_count=1`); consolidated ingestion history is tracked in `paper_versions` (not shown in the main table).

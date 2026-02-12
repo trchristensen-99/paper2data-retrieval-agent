@@ -20,6 +20,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=Path("outputs"),
         help="Directory to store generated outputs",
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Fast mode: skip expensive deep checks (data availability, QC, enrichment/repair retries)",
+    )
     return parser
 
 
@@ -28,7 +33,7 @@ async def _run(args: argparse.Namespace) -> dict[str, str]:
         raise FileNotFoundError(f"Input file not found: {args.paper_markdown}")
 
     paper_text = args.paper_markdown.read_text(encoding="utf-8")
-    artifacts = await run_pipeline(paper_text)
+    artifacts = await run_pipeline(paper_text, fast_mode=bool(args.fast))
 
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     run_dir = args.output_dir / timestamp
