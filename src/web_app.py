@@ -30,9 +30,8 @@ HTML_PAGE = """<!doctype html>
     .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
     .card .k { color: #5a6778; font-size: 12px; }
     .card .v { font-size: 21px; font-weight: 700; }
-    .filters { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr 1fr auto; gap: 8px; margin-bottom: 10px; }
+    .filters { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr auto; gap: 8px; margin-bottom: 10px; }
     input, select, button { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff; }
-    select[multiple] { min-height: 84px; }
     button { background: var(--accent); color: #fff; border-color: var(--accent); cursor: pointer; }
     table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eef2f6; vertical-align: top; }
@@ -52,14 +51,16 @@ HTML_PAGE = """<!doctype html>
   <div class=\"wrap\">
     <h1>Paper2Data Terminal</h1>
     <div class=\"grid\" id=\"summary\"></div>
-    <div class=\"muted\">Tip: Cmd/Ctrl-click to multi-select assays or organisms.</div>
+    <div class=\"muted\">Use Field + Subcategory to focus domain-specific filters.</div>
     <div class=\"filters\">
       <input id=\"q\" placeholder=\"Search title, DOI, methods, findings...\" />
+      <select id=\"field\"><option value=\"\">All fields</option></select>
+      <select id=\"subcategory\"><option value=\"\">All subcategories</option></select>
       <select id=\"journal\"><option value=\"\">All journals</option></select>
       <select id=\"repo\"><option value=\"\">All repositories</option></select>
       <select id=\"status\"><option value=\"\">All availability</option></select>
-      <select id=\"assay\" multiple></select>
-      <select id=\"organism\" multiple></select>
+      <select id=\"assay\"><option value=\"\">All assay types</option></select>
+      <select id=\"organism\"><option value=\"\">All organisms</option></select>
       <input id=\"min_conf\" type=\"number\" min=\"0\" max=\"1\" step=\"0.01\" placeholder=\"Min conf (0-1)\" />
       <button id=\"run\">Run</button>
     </div>
@@ -71,7 +72,7 @@ HTML_PAGE = """<!doctype html>
             <th class=\"sortable\" data-sort=\"journal\">Journal</th>
             <th class=\"sortable\" data-sort=\"publication_date\">Date</th>
             <th class=\"sortable\" data-sort=\"extraction_confidence\">Conf</th>
-            <th class=\"sortable\" data-sort=\"source_count\">Sources</th>
+            <th class=\"sortable\" data-sort=\"version_count\">Versions</th>
           </tr>
         </thead>
         <tbody id=\"rows\"></tbody>
@@ -83,10 +84,6 @@ HTML_PAGE = """<!doctype html>
   <script>
     let sortBy = 'updated_at';
     let sortDir = 'desc';
-
-    function selectedValues(id) {
-      return Array.from(document.getElementById(id).selectedOptions).map(o => o.value).filter(Boolean);
-    }
 
     function fillOptions(id, items, placeholder) {
       const el = document.getElementById(id);
@@ -102,9 +99,6 @@ HTML_PAGE = """<!doctype html>
         o.textContent = `${x.name} (${x.count})`;
         el.appendChild(o);
       });
-      if (el.multiple) {
-        Array.from(el.options).forEach(o => { o.selected = false; });
-      }
     }
 
     async function loadSummary() {
@@ -114,33 +108,39 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('summary').innerHTML = [
         ['Papers', stats.papers],
         ['Versions', stats.versions],
-        ['Total Sources', stats.total_sources],
+        ['Paper Sources', stats.total_sources],
         ['DB Path', stats.db_path]
       ].map(([k,v]) => `<div class=\"card\"><div class=\"k\">${k}</div><div class=\"v\">${v}</div></div>`).join('');
 
       fillOptions('journal', facets.journals.map(j => ({name: j.journal === 'Unknown' ? '' : j.journal, count: j.count})).filter(x => x.name), 'All journals');
       fillOptions('repo', facets.repositories, 'All repositories');
       fillOptions('status', facets.data_statuses || [], 'All availability');
-      fillOptions('assay', facets.assay_types || [], '');
-      fillOptions('organism', facets.organisms || [], '');
+      fillOptions('assay', facets.assay_types || [], 'All assay types');
+      fillOptions('organism', facets.organisms || [], 'All organisms');
+      fillOptions('field', facets.field_domains || [], 'All fields');
+      fillOptions('subcategory', facets.subcategories || [], 'All subcategories');
     }
 
     async function runQuery() {
       const params = new URLSearchParams();
       const q = document.getElementById('q').value.trim();
+      const field = document.getElementById('field').value;
+      const subcategory = document.getElementById('subcategory').value;
       const journal = document.getElementById('journal').value;
       const repo = document.getElementById('repo').value;
       const status = document.getElementById('status').value;
-      const assays = selectedValues('assay');
-      const organisms = selectedValues('organism');
+      const assay = document.getElementById('assay').value;
+      const organism = document.getElementById('organism').value;
       const minConf = document.getElementById('min_conf').value.trim();
 
       if (q) params.set('q', q);
+      if (field) params.set('field_domain', field);
+      if (subcategory) params.set('subcategory', subcategory);
       if (journal) params.set('journal', journal);
       if (repo) params.set('repository', repo);
       if (status) params.set('data_status', status);
-      assays.forEach(v => params.append('assay', v));
-      organisms.forEach(v => params.append('organism', v));
+      if (assay) params.set('assay', assay);
+      if (organism) params.set('organism', organism);
       if (minConf) params.set('min_confidence', minConf);
       params.set('sort_by', sortBy);
       params.set('sort_dir', sortDir);
@@ -161,7 +161,7 @@ HTML_PAGE = """<!doctype html>
 
       rows.forEach(row => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${row.title || ''}</td><td>${row.journal || ''}</td><td>${row.publication_date || ''}</td><td>${(row.extraction_confidence ?? '').toString()}</td><td>${row.source_count}</td>`;
+        tr.innerHTML = `<td>${row.title || ''}</td><td>${row.journal || ''}</td><td>${row.publication_date || ''}</td><td>${(row.extraction_confidence ?? '').toString()}</td><td>${row.version_count ?? 1}</td>`;
         tr.onclick = async () => {
           const detailRes = await fetch('/api/paper/' + row.paper_id);
           const detail = await detailRes.json();
@@ -172,6 +172,19 @@ HTML_PAGE = """<!doctype html>
 
       if (rows.length === 0) {
         tbody.innerHTML = '<tr><td colspan=\"5\">No papers matched.</td></tr>';
+      }
+    }
+
+    function applyFieldBehavior() {
+      const field = document.getElementById('field').value;
+      const assay = document.getElementById('assay');
+      const organism = document.getElementById('organism');
+      const biologyField = field === '' || field === 'biology';
+      assay.disabled = !biologyField;
+      organism.disabled = !biologyField;
+      if (!biologyField) {
+        assay.value = '';
+        organism.value = '';
       }
     }
 
@@ -191,10 +204,13 @@ HTML_PAGE = """<!doctype html>
     }
 
     document.getElementById('run').onclick = runQuery;
+    document.getElementById('field').onchange = () => {
+      applyFieldBehavior();
+      runQuery();
+    };
     window.onload = async () => {
       await loadSummary();
-      document.getElementById('assay').selectedIndex = -1;
-      document.getElementById('organism').selectedIndex = -1;
+      applyFieldBehavior();
       initSortHandlers();
       await runQuery();
     };
@@ -246,8 +262,10 @@ class _Handler(BaseHTTPRequestHandler):
             journal = params.get("journal", [""])[0] or None
             repository = params.get("repository", [""])[0] or None
             data_status = params.get("data_status", [""])[0] or None
-            assay_types = [x for x in params.get("assay", []) if x.strip()]
-            organisms = [x for x in params.get("organism", []) if x.strip()]
+            assay_type = params.get("assay", [""])[0] or None
+            organism = params.get("organism", [""])[0] or None
+            field_domain = params.get("field_domain", [""])[0] or None
+            subcategory = params.get("subcategory", [""])[0] or None
             min_confidence_raw = params.get("min_confidence", [""])[0]
             limit_raw = params.get("limit", ["100"])[0]
             sort_by = params.get("sort_by", ["updated_at"])[0]
@@ -268,8 +286,10 @@ class _Handler(BaseHTTPRequestHandler):
                 q=q,
                 journal=journal,
                 repository=repository,
-                assay_types=assay_types,
-                organisms=organisms,
+                assay_type=assay_type,
+                organism=organism,
+                field_domain=field_domain,
+                subcategory=subcategory,
                 data_status=data_status,
                 min_confidence=min_confidence,
                 sort_by=sort_by,

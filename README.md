@@ -55,8 +55,19 @@ You can ingest extraction outputs into a persistent SQLite database that support
 - Local web UI (summary + search/filter + full record JSON viewer):
   - `uv run python -m src.web_app --db outputs/paper_terminal.db --host 127.0.0.1 --port 8080`
   - Open `http://127.0.0.1:8080`
-  - Includes sortable columns and filters for journal, repository, data availability status, assay type, organism, and confidence threshold.
+  - Includes sortable columns and filters for field domain, subcategory, journal/source venue, repository, data availability status, assay type, organism, and confidence threshold.
 - Compare baseline vs updated batch summaries:
   - `uv run python -m src.compare_batches --baseline <baseline_summary.json> --updated <updated_summary.json>`
 
 When a new entry matches an existing paper (by DOI, PMID, or normalized title), records are harmonized using an AI merge agent with deterministic fallback rules.
+- Each canonical paper row represents one paper source (`source_count=1`); consolidated ingestion history is tracked in `paper_versions` and shown as `version_count` in the UI.
+- If journal is missing, the DB stores a source venue fallback (e.g., arXiv/bioRxiv/domain/DOI).
+
+## Confidence Metric
+- `extraction_confidence` is computed deterministically from:
+  - metadata coverage (title/authors/DOI-PMID/venue),
+  - methods coverage (design/assay/sample size/stat tests),
+  - results coverage (quantitative findings + spin assessment),
+  - data-access verification status,
+  - QC penalties for missing/suspicious empty fields.
+- It is no longer purely model self-reported.

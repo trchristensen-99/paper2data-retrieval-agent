@@ -92,7 +92,7 @@ async def test_db_upsert_merges_existing(monkeypatch: pytest.MonkeyPatch, tmp_pa
         stats = db.stats()
         assert stats["papers"] == 1
         row = db.search("Same Title")[0]
-        assert row["source_count"] == 2
+        assert row["source_count"] == 1
     finally:
         db.close()
 

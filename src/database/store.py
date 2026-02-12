@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 from src.database.harmonizer import harmonize_records
 from src.schemas.models import PaperRecord
@@ -22,6 +23,79 @@ def _safe_json(data: Any) -> str:
 
 def _now() -> str:
     return datetime.utcnow().isoformat()
+
+
+def _extract_domain(value: str | None) -> str | None:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    target = raw if "://" in raw else f"https://{raw}"
+    try:
+        domain = urlparse(target).netloc.lower()
+    except Exception:  # noqa: BLE001
+        return None
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain or None
+
+
+def _infer_venue(record: PaperRecord) -> str:
+    journal = (record.metadata.journal or "").strip()
+    if journal:
+        return journal
+
+    doi = (record.metadata.doi or "").lower().strip()
+    if doi.startswith("10.48550/"):
+        return "arXiv"
+    if doi.startswith("10.1101/"):
+        return "bioRxiv/medRxiv"
+    if doi:
+        return f"DOI:{record.metadata.doi}"
+
+    for candidate in record.code_repositories:
+        domain = _extract_domain(candidate)
+        if domain:
+            return domain
+    for accession in record.data_accessions:
+        domain = _extract_domain(accession.url)
+        if domain:
+            return domain
+    if record.metadata.pmid:
+        return "PubMed (journal unavailable)"
+    return "Unknown"
+
+
+def _classify_field_and_subcategory(record: PaperRecord) -> tuple[str, str]:
+    text = " ".join(
+        [
+            record.metadata.title or "",
+            " ".join(record.metadata.keywords),
+            record.methods.experimental_design,
+            " ".join(record.methods.assay_types),
+            " ".join(record.methods.organisms),
+            " ".join(record.results.qualitative_findings),
+        ]
+    ).lower()
+    patterns: list[tuple[str, str, tuple[str, ...]]] = [
+        ("biology", "cancer", ("tumor", "oncology", "cancer")),
+        ("biology", "development", ("embryo", "developmental", "morphogenesis")),
+        ("biology", "evolutionary_biology", ("evolution", "phylogen", "population genetics")),
+        ("biology", "genomics", ("genome", "rna-seq", "chip-seq", "atac-seq", "single-cell")),
+        ("biology", "neuroscience", ("neuro", "brain", "synapse")),
+        ("biology", "immunology", ("immune", "immun", "t-cell", "b-cell")),
+        ("environmental", "climate", ("climate", "weather", "cordex", "temperature", "precip")),
+        ("environmental", "ecology", ("ecology", "biodiversity", "species distribution")),
+        ("computational", "bioinformatics", ("bioinformatic", "pipeline", "algorithm", "machine learning")),
+        ("clinical", "translational", ("patient", "clinical", "cohort", "trial")),
+    ]
+    for field_domain, subcategory, keys in patterns:
+        if any(k in text for k in keys):
+            return field_domain, subcategory
+    if record.methods.organisms:
+        return "biology", "general_biology"
+    return "general_science", "uncategorized"
 
 
 def compute_paper_key(record: PaperRecord) -> str:
@@ -110,6 +184,10 @@ class PaperDatabase:
         self._ensure_column("paper_search", "assay_types", "TEXT")
         self._ensure_column("paper_search", "organisms", "TEXT")
         self._ensure_column("paper_search", "data_status", "TEXT")
+        self._ensure_column("paper_search", "field_domain", "TEXT")
+        self._ensure_column("paper_search", "subcategory", "TEXT")
+        self._normalize_source_count()
+        self._backfill_search_and_venue()
         self.conn.commit()
 
     def _table_columns(self, table: str) -> set[str]:
@@ -119,6 +197,20 @@ class PaperDatabase:
     def _ensure_column(self, table: str, column: str, sql_type: str) -> None:
         if column not in self._table_columns(table):
             self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
+
+    def _normalize_source_count(self) -> None:
+        self.conn.execute("UPDATE papers SET source_count = 1 WHERE source_count IS NULL OR source_count != 1")
+
+    def _backfill_search_and_venue(self) -> None:
+        rows = self.conn.execute("SELECT paper_id, record_json FROM papers").fetchall()
+        for row in rows:
+            try:
+                record = PaperRecord.model_validate(json.loads(row["record_json"]))
+            except Exception:  # noqa: BLE001
+                continue
+            venue = _infer_venue(record)
+            self.conn.execute("UPDATE papers SET journal = ? WHERE paper_id = ?", (venue, row["paper_id"]))
+            self._update_search_row(str(row["paper_id"]), record)
 
     def _find_existing(self, record: PaperRecord) -> sqlite3.Row | None:
         cur = self.conn.cursor()
@@ -157,11 +249,13 @@ class PaperDatabase:
         assay_types = "; ".join(record.methods.assay_types)
         organisms = "; ".join(record.methods.organisms)
         data_status = record.data_availability.overall_status
+        field_domain, subcategory = _classify_field_and_subcategory(record)
+        venue = _infer_venue(record)
         self.conn.execute(
             """
             INSERT INTO paper_search
-            (paper_id, title, authors, journal, keywords, methods, findings, repositories, assay_types, organisms, data_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (paper_id, title, authors, journal, keywords, methods, findings, repositories, assay_types, organisms, data_status, field_domain, subcategory)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(paper_id) DO UPDATE SET
                 title=excluded.title,
                 authors=excluded.authors,
@@ -172,13 +266,15 @@ class PaperDatabase:
                 repositories=excluded.repositories,
                 assay_types=excluded.assay_types,
                 organisms=excluded.organisms,
-                data_status=excluded.data_status
+                data_status=excluded.data_status,
+                field_domain=excluded.field_domain,
+                subcategory=excluded.subcategory
             """,
             (
                 paper_id,
                 record.metadata.title,
                 authors,
-                record.metadata.journal,
+                venue,
                 keywords,
                 methods,
                 findings,
@@ -186,6 +282,8 @@ class PaperDatabase:
                 assay_types,
                 organisms,
                 data_status,
+                field_domain,
+                subcategory,
             ),
         )
 
@@ -224,7 +322,7 @@ class PaperDatabase:
                     _norm_text(record.metadata.title),
                     record.metadata.doi,
                     record.metadata.pmid,
-                    record.metadata.journal,
+                    _infer_venue(record),
                     record.metadata.publication_date,
                     record.extraction_confidence,
                     1,
@@ -254,7 +352,7 @@ class PaperDatabase:
                    journal = ?,
                    publication_date = ?,
                    extraction_confidence = ?,
-                   source_count = source_count + 1,
+                   source_count = 1,
                    record_json = ?,
                    updated_at = ?
              WHERE paper_id = ?
@@ -265,7 +363,7 @@ class PaperDatabase:
                 _norm_text(merged.metadata.title),
                 merged.metadata.doi,
                 merged.metadata.pmid,
-                merged.metadata.journal,
+                _infer_venue(merged),
                 merged.metadata.publication_date,
                 merged.extraction_confidence,
                 _safe_json(merged.model_dump()),
@@ -318,8 +416,10 @@ class PaperDatabase:
         q: str = "",
         journal: str | None = None,
         repository: str | None = None,
-        assay_types: list[str] | None = None,
-        organisms: list[str] | None = None,
+        assay_type: str | None = None,
+        organism: str | None = None,
+        field_domain: str | None = None,
+        subcategory: str | None = None,
         data_status: str | None = None,
         min_confidence: float | None = None,
         sort_by: str = "updated_at",
@@ -350,18 +450,18 @@ class PaperDatabase:
         if repository:
             clauses.append("s.repositories LIKE ?")
             params.append(f"%{repository}%")
-        if assay_types:
-            assay_sub = []
-            for value in assay_types:
-                assay_sub.append("s.assay_types LIKE ?")
-                params.append(f"%{value}%")
-            clauses.append("(" + " OR ".join(assay_sub) + ")")
-        if organisms:
-            org_sub = []
-            for value in organisms:
-                org_sub.append("s.organisms LIKE ?")
-                params.append(f"%{value}%")
-            clauses.append("(" + " OR ".join(org_sub) + ")")
+        if assay_type:
+            clauses.append("s.assay_types LIKE ?")
+            params.append(f"%{assay_type}%")
+        if organism:
+            clauses.append("s.organisms LIKE ?")
+            params.append(f"%{organism}%")
+        if field_domain:
+            clauses.append("s.field_domain = ?")
+            params.append(field_domain)
+        if subcategory:
+            clauses.append("s.subcategory = ?")
+            params.append(subcategory)
         if data_status:
             clauses.append("s.data_status = ?")
             params.append(data_status)
@@ -379,6 +479,7 @@ class PaperDatabase:
             "publication_date": "p.publication_date",
             "extraction_confidence": "p.extraction_confidence",
             "source_count": "p.source_count",
+            "version_count": "version_count",
             "updated_at": "p.updated_at",
         }
         sort_col = sort_cols.get(sort_by, "p.updated_at")
@@ -388,10 +489,13 @@ class PaperDatabase:
             f"""
             SELECT p.paper_id, p.title, p.doi, p.pmid, p.journal, p.publication_date,
                    p.extraction_confidence, p.source_count,
+                   (SELECT COUNT(*) FROM paper_versions v WHERE v.paper_id = p.paper_id) AS version_count,
                    COALESCE(s.repositories, '') AS repositories,
                    COALESCE(s.assay_types, '') AS assay_types,
                    COALESCE(s.organisms, '') AS organisms,
-                   COALESCE(s.data_status, '') AS data_status
+                   COALESCE(s.data_status, '') AS data_status,
+                   COALESCE(s.field_domain, '') AS field_domain,
+                   COALESCE(s.subcategory, '') AS subcategory
               FROM papers p
               LEFT JOIN paper_search s ON s.paper_id = p.paper_id
               {where_sql}
@@ -412,12 +516,14 @@ class PaperDatabase:
             """
         ).fetchall()
         repo_rows = self.conn.execute(
-            "SELECT repositories, assay_types, organisms, data_status FROM paper_search"
+            "SELECT repositories, assay_types, organisms, data_status, field_domain, subcategory FROM paper_search"
         ).fetchall()
         repo_counts: dict[str, int] = {}
         assay_counts: dict[str, int] = {}
         organism_counts: dict[str, int] = {}
         status_counts: dict[str, int] = {}
+        field_counts: dict[str, int] = {}
+        subcat_counts: dict[str, int] = {}
         for row in repo_rows:
             for token in str(row["repositories"] or "").split(";"):
                 repo = token.strip()
@@ -437,6 +543,12 @@ class PaperDatabase:
             status = str(row["data_status"] or "").strip()
             if status:
                 status_counts[status] = status_counts.get(status, 0) + 1
+            field_domain = str(row["field_domain"] or "").strip()
+            if field_domain:
+                field_counts[field_domain] = field_counts.get(field_domain, 0) + 1
+            subcategory = str(row["subcategory"] or "").strip()
+            if subcategory:
+                subcat_counts[subcategory] = subcat_counts.get(subcategory, 0) + 1
         repositories = [
             {"name": key, "count": value}
             for key, value in sorted(repo_counts.items(), key=lambda item: (-item[1], item[0]))
@@ -453,12 +565,22 @@ class PaperDatabase:
             {"name": key, "count": value}
             for key, value in sorted(status_counts.items(), key=lambda item: (-item[1], item[0]))
         ]
+        field_domains = [
+            {"name": key, "count": value}
+            for key, value in sorted(field_counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
+        subcategories = [
+            {"name": key, "count": value}
+            for key, value in sorted(subcat_counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
         return {
             "journals": [dict(r) for r in journal_rows],
             "repositories": repositories,
             "assay_types": assay_types,
             "organisms": organisms,
             "data_statuses": data_statuses,
+            "field_domains": field_domains,
+            "subcategories": subcategories,
         }
 
     def fetch_paper(self, paper_id: str) -> dict[str, Any] | None:

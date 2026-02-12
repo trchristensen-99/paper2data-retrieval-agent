@@ -21,6 +21,7 @@ from src.agents.results import results_agent, run_results_agent
 from src.agents.synthesis import fallback_synthesis, run_synthesis_agent, synthesis_agent
 from src.schemas.models import PaperRecord, SynthesisInput, SynthesisOutput
 from src.utils.config import MODELS
+from src.utils.confidence import compute_extraction_confidence
 from src.utils.logging import log_event, reset_events
 
 
@@ -163,6 +164,16 @@ async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
     step_timings_seconds["synthesis"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "synthesis", "seconds": step_timings_seconds["synthesis"]})
     _print_step_timing("synthesis", step_timings_seconds["synthesis"])
+
+    confidence = compute_extraction_confidence(
+        metadata=metadata,
+        methods=methods,
+        results=results,
+        data_availability=data_availability.data_availability,
+        quality_check=quality_check,
+    )
+    synthesis.record.extraction_confidence = confidence.score
+    log_event("pipeline.confidence", confidence.as_dict())
 
     pipeline_duration_seconds = perf_counter() - pipeline_start
     log_event(
