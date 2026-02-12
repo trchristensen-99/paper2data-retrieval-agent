@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.agents.manager import run_pipeline
+from src.utils.env import load_env_file
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -52,6 +53,7 @@ async def _run(args: argparse.Namespace) -> dict[str, str]:
 
 
 def main() -> None:
+    load_env_file()
     parser = _build_arg_parser()
     args = parser.parse_args()
     summary = asyncio.run(_run(args))
