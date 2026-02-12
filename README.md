@@ -12,7 +12,7 @@ Multi-agent scientific paper retrieval pipeline for the Paper2Data project.
 2. Install dependencies with `uv`:
    - `uv sync`
 3. Run pipeline:
-   - `uv run python -m main ../data_for_agents_example/data_for_retrieval_agent/s41597-021-00905-y.md`
+   - `uv run python -m src.main ../data_for_agents_example/data_for_retrieval_agent/s41597-021-00905-y.md`
 
 ## Architecture
 - Manager agent orchestrates:
