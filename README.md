@@ -37,5 +37,7 @@ You can ingest extraction outputs into a persistent SQLite database that support
   - `uv run python -m src.database_cli --db outputs/paper_terminal.db show --paper-id <paper_id>`
 - DB stats:
   - `uv run python -m src.database_cli --db outputs/paper_terminal.db stats`
+- Compare baseline vs updated batch summaries:
+  - `uv run python -m src.compare_batches --baseline <baseline_summary.json> --updated <updated_summary.json>`
 
 When a new entry matches an existing paper (by DOI, PMID, or normalized title), records are harmonized using an AI merge agent with deterministic fallback rules.
