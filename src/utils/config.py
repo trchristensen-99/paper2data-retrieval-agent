@@ -11,6 +11,7 @@ def _model(name: str) -> str:
 
 @dataclass(frozen=True)
 class ModelConfig:
+    anatomy: str = _model("P2D_MODEL_ANATOMY")
     metadata: str = _model("P2D_MODEL_METADATA")
     methods: str = _model("P2D_MODEL_METHODS")
     results: str = _model("P2D_MODEL_RESULTS")

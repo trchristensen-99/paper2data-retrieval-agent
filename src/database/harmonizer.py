@@ -89,6 +89,15 @@ def _merge_accessions(a: list[DataAccession], b: list[DataAccession]) -> list[Da
     return list(merged.values())
 
 
+def _merge_related_resources(a: list, b: list) -> list:
+    merged: dict[str, Any] = {}
+    for item in a + b:
+        key = f"{_norm_text(getattr(item, 'name', ''))}::{_norm_text(getattr(item, 'url', '') or '')}"
+        if key not in merged:
+            merged[key] = item
+    return list(merged.values())
+
+
 def fallback_harmonize(existing: PaperRecord, incoming: PaperRecord) -> HarmonizationOutput:
     merged = existing.model_copy(deep=True)
 
@@ -143,6 +152,10 @@ def fallback_harmonize(existing: PaperRecord, incoming: PaperRecord) -> Harmoniz
     )
     if len(incoming.results.dataset_properties) > len(merged.results.dataset_properties):
         merged.results.dataset_properties = incoming.results.dataset_properties
+    if incoming.results.dataset_profile and not merged.results.dataset_profile:
+        merged.results.dataset_profile = incoming.results.dataset_profile
+    if len(incoming.results.tables_extracted) > len(merged.results.tables_extracted):
+        merged.results.tables_extracted = incoming.results.tables_extracted
     if len(incoming.results.method_benchmarks) > len(merged.results.method_benchmarks):
         merged.results.method_benchmarks = incoming.results.method_benchmarks
     if incoming.results.paper_type and not merged.results.paper_type:
@@ -150,6 +163,7 @@ def fallback_harmonize(existing: PaperRecord, incoming: PaperRecord) -> Harmoniz
 
     merged.data_accessions = _merge_accessions(merged.data_accessions, incoming.data_accessions)
     merged.code_repositories = _uniq_list(merged.code_repositories + incoming.code_repositories)
+    merged.related_resources = _merge_related_resources(merged.related_resources, incoming.related_resources)
 
     merged.data_availability = DataAvailabilityReport(
         overall_status=merged.data_availability.overall_status

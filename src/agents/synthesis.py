@@ -55,6 +55,7 @@ def fallback_synthesis(payload: SynthesisInput) -> SynthesisOutput:
         results=payload.results,
         data_accessions=payload.data_accessions,
         data_availability=payload.data_availability,
+        related_resources=payload.related_resources,
         extraction_timestamp=datetime.utcnow().isoformat(),
         extraction_confidence=0.6,
     )
@@ -83,6 +84,7 @@ def fallback_synthesis(payload: SynthesisInput) -> SynthesisOutput:
             "",
             "## Data Availability",
             f"Overall status: {payload.data_availability.overall_status}",
+            f"Check status: {payload.data_availability.check_status}",
             "",
             "## Raw Record",
             "```json",

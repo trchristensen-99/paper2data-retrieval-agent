@@ -14,7 +14,9 @@ RESULTS_PROMPT = """You are the No-Spin Zone results extractor.
 You must adapt extraction to paper type:
 - experimental: populate `experimental_findings` (effect sizes/comparisons first).
 - dataset_descriptor: populate `dataset_properties` (size, dimensions, coverage, temporal range, format, license if present).
+  Also populate `dataset_profile` with structured fields and `tables_extracted` for key tables.
 - review/meta_analysis: populate `synthesized_claims` with evidence-oriented concise claims.
+  If scoping review / PRISMA-like flow is present, capture those counts in `dataset_profile.prisma_flow`.
 - methods: populate `method_benchmarks` with task/metric/value/baseline/context when available.
 - commentary: keep concise `synthesized_claims` only.
 
@@ -60,6 +62,9 @@ def _sanitize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
     dataset_props = payload.get("dataset_properties")
     if not isinstance(dataset_props, list):
         dataset_props = []
+    dataset_profile = payload.get("dataset_profile")
+    if not isinstance(dataset_profile, dict):
+        dataset_profile = None
     synthesized_claims = payload.get("synthesized_claims")
     if not isinstance(synthesized_claims, list):
         synthesized_claims = payload.get("qualitative_findings")
@@ -68,6 +73,9 @@ def _sanitize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
     method_benchmarks = payload.get("method_benchmarks")
     if not isinstance(method_benchmarks, list):
         method_benchmarks = []
+    tables_extracted = payload.get("tables_extracted")
+    if not isinstance(tables_extracted, list):
+        tables_extracted = []
     key_figures = payload.get("key_figures")
     if not isinstance(key_figures, list):
         key_figures = []
@@ -79,8 +87,10 @@ def _sanitize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "paper_type": paper_type,
         "experimental_findings": experimental,
         "dataset_properties": dataset_props,
+        "dataset_profile": dataset_profile,
         "synthesized_claims": _coerce_list_of_str(synthesized_claims),
         "method_benchmarks": method_benchmarks,
+        "tables_extracted": tables_extracted,
         "key_figures": key_figures,
     }
 
@@ -114,7 +124,7 @@ async def run_results_agent(
             "[FORMAT_FIX]\n"
             "Return JSON object with keys exactly:\n"
             "paper_type, experimental_findings, dataset_properties, synthesized_claims, "
-            "method_benchmarks, key_figures.\n"
+            "method_benchmarks, dataset_profile, tables_extracted, key_figures.\n"
             "Values must be raw data, not schema metadata.\n"
         )
         repair_result = await run_with_rate_limit_retry(
@@ -136,6 +146,7 @@ async def run_results_agent(
             "paper_type": output.paper_type,
             "experimental_findings": len(output.experimental_findings),
             "dataset_properties": len(output.dataset_properties),
+            "tables_extracted": len(output.tables_extracted),
             "synthesized_claims": len(output.synthesized_claims),
             "method_benchmarks": len(output.method_benchmarks),
         },

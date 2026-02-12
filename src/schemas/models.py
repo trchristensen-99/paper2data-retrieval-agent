@@ -56,6 +56,43 @@ class MethodBenchmark(BaseModel):
     context: str
 
 
+class DatasetColumn(BaseModel):
+    name: str
+    category: Optional[str] = None
+    description: Optional[str] = None
+
+
+class DatasetProfile(BaseModel):
+    name: Optional[str] = None
+    format: list[str] = []
+    record_count: Optional[int] = None
+    data_point_count: Optional[int] = None
+    columns: Optional[int] = None
+    temporal_coverage: Optional[str] = None
+    source_corpus_size: Optional[int] = None
+    dimensions: dict[str, Any] = {}
+    version: Optional[str] = None
+    license: Optional[str] = None
+    repository_contents: list[str] = []
+    prisma_flow: dict[str, int] = {}
+    processing_pipeline_summary: Optional[str] = None
+    column_schema: list[DatasetColumn] = []
+
+
+class ExtractedTable(BaseModel):
+    table_id: str
+    title: Optional[str] = None
+    columns: list[str] = []
+    summary: Optional[str] = None
+
+
+class RelatedResource(BaseModel):
+    name: str
+    url: Optional[str] = None
+    type: str = Field(description="visualization|tool|standard|related_dataset")
+    description: Optional[str] = None
+
+
 class DataAccession(BaseModel):
     accession_id: str
     category: str = Field(
@@ -87,6 +124,7 @@ class DataAvailabilityReport(BaseModel):
     verified_repositories: list[str]
     discrepancies: list[str]
     notes: str
+    check_status: str = "ok"
 
     @field_validator("claimed_repositories", "verified_repositories", "discrepancies", mode="before")
     @classmethod
@@ -156,13 +194,16 @@ class ResultsSummary(BaseModel):
     paper_type: Optional[str] = None
     experimental_findings: list[ExperimentalFinding] = []
     dataset_properties: list[DescriptiveStat] = []
+    dataset_profile: Optional[DatasetProfile] = None
     synthesized_claims: list[str] = []
     method_benchmarks: list[MethodBenchmark] = []
     key_figures: list[FigureSummary] = []
+    tables_extracted: list[ExtractedTable] = []
 
     @field_validator(
         "experimental_findings",
         "dataset_properties",
+        "tables_extracted",
         "synthesized_claims",
         "method_benchmarks",
         "key_figures",
@@ -189,8 +230,10 @@ class ResultsSummary(BaseModel):
             data["synthesized_claims"] = data.get("qualitative_findings")
         if "paper_type" not in data:
             data["paper_type"] = None
+        data.setdefault("dataset_profile", None)
         data.setdefault("dataset_properties", [])
         data.setdefault("method_benchmarks", [])
+        data.setdefault("tables_extracted", [])
         return data
 
 
@@ -203,11 +246,12 @@ class PaperRecord(BaseModel):
     data_accessions: list[DataAccession]
     data_availability: DataAvailabilityReport
     code_repositories: list[str] = []
+    related_resources: list[RelatedResource] = []
     extraction_timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
     agent_version: str = "0.1.0"
     extraction_confidence: float = Field(ge=0.0, le=1.0)
 
-    @field_validator("data_accessions", "code_repositories", mode="before")
+    @field_validator("data_accessions", "code_repositories", "related_resources", mode="before")
     @classmethod
     def _none_to_list(cls, value):
         return [] if value is None else value
@@ -219,6 +263,7 @@ class SynthesisInput(BaseModel):
     results: ResultsSummary
     data_accessions: list[DataAccession]
     data_availability: DataAvailabilityReport
+    related_resources: list[RelatedResource] = []
 
 
 class SynthesisOutput(BaseModel):
@@ -246,3 +291,13 @@ class MetadataEnrichmentOutput(BaseModel):
     journal: Optional[str] = None
     publication_date: Optional[str] = None
     notes: str
+
+
+class PaperAnatomyOutput(BaseModel):
+    sections: list[str] = []
+    tables: list[str] = []
+    figures: list[str] = []
+    urls: list[str] = []
+    accession_candidates: list[str] = []
+    prisma_flow: dict[str, int] = {}
+    notes: str = ""

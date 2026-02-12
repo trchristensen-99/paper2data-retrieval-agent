@@ -12,6 +12,7 @@ from src.schemas.models import (
     MetadataRecord,
     MethodBenchmark,
     MethodsSummary,
+    PaperAnatomyOutput,
     PaperRecord,
     ResultsSummary,
     SynthesisOutput,
@@ -60,7 +61,18 @@ async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) 
     async def _metadata(_: str, guidance: str | None = None) -> MetadataRecord:
         return MetadataRecord(title="Demo Paper", authors=["A. Author"])
 
-    async def _methods(_: str) -> MethodsSummary:
+    async def _anatomy(_: str) -> PaperAnatomyOutput:
+        return PaperAnatomyOutput(
+            sections=["Abstract", "Methods"],
+            tables=["Table 1"],
+            figures=["Figure 1"],
+            urls=["https://example.org"],
+            accession_candidates=["GSE00001"],
+            prisma_flow={"included": 1},
+            notes="ok",
+        )
+
+    async def _methods(_: str, guidance: str | None = None) -> MethodsSummary:
         return MethodsSummary(
             organisms=["human"],
             cell_types=["HEK293"],
@@ -103,6 +115,7 @@ async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) 
                     files_listed=["a.fastq.gz", "b.fastq.gz"],
                 )
             ]
+            related_resources = []
             data_availability = DataAvailabilityReport(
                 overall_status="accessible",
                 claimed_repositories=["GEO"],
@@ -150,6 +163,7 @@ async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) 
         return _QC()
 
     monkeypatch.setattr(manager, "run_metadata_agent", _metadata)
+    monkeypatch.setattr(manager, "run_anatomy_agent", _anatomy)
     monkeypatch.setattr(manager, "run_methods_agent", _methods)
     monkeypatch.setattr(manager, "run_results_agent", _results)
     monkeypatch.setattr(manager, "run_data_availability_agent", _data)

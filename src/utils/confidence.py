@@ -161,6 +161,11 @@ def compute_extraction_confidence(
     status_quality = status_scores.get(status, 0.0)
     verified_bonus = 0.2 if data_availability.verified_repositories else 0.0
     discrepancy_penalty = min(0.3, 0.05 * len(data_availability.discrepancies))
+    check_status = (data_availability.check_status or "").strip().lower()
+    if check_status == "failed":
+        discrepancy_penalty += 0.35
+    elif check_status == "partial":
+        discrepancy_penalty += 0.15
     data_quality = _clamp(status_quality + verified_bonus - discrepancy_penalty)
     data_access_component = data_quality * 0.14
 

@@ -6,6 +6,7 @@ from time import perf_counter
 
 from agents import Agent
 
+from src.agents.anatomy import anatomy_agent, run_anatomy_agent
 from src.agents.data_availability import (
     DataAvailabilityOutput,
     data_availability_agent,
@@ -36,6 +37,7 @@ manager_agent = Agent(
         "data_availability -> synthesis."
     ),
     handoffs=[
+        anatomy_agent,
         metadata_agent,
         methods_agent,
         results_agent,
@@ -148,6 +150,16 @@ def _missing_key_metadata_fields(
     return missing
 
 
+def _anatomy_guidance_blob(sections: list[str], tables: list[str], figures: list[str], urls: list[str]) -> str:
+    return (
+        "Paper anatomy hints:\n"
+        f"- Sections: {sections[:12]}\n"
+        f"- Tables: {tables[:12]}\n"
+        f"- Figures: {figures[:12]}\n"
+        f"- URLs: {urls[:20]}\n"
+    )
+
+
 @dataclass
 class PipelineArtifacts:
     record: PaperRecord
@@ -166,7 +178,20 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     log_event("pipeline.start", {"chars": len(paper_markdown)})
 
     step_start = perf_counter()
-    metadata = await run_metadata_agent(paper_markdown)
+    anatomy = await run_anatomy_agent(paper_markdown)
+    step_timings_seconds["anatomy"] = perf_counter() - step_start
+    log_event("pipeline.step_timing", {"step": "anatomy", "seconds": step_timings_seconds["anatomy"]})
+    _print_step_timing("anatomy", step_timings_seconds["anatomy"])
+
+    anatomy_guidance = _anatomy_guidance_blob(
+        anatomy.sections,
+        anatomy.tables,
+        anatomy.figures,
+        anatomy.urls,
+    )
+
+    step_start = perf_counter()
+    metadata = await run_metadata_agent(paper_markdown, guidance=anatomy_guidance)
     if not is_valid_category_subcategory(metadata.category, metadata.subcategory):
         log_event(
             "pipeline.taxonomy.flagged_invalid",
@@ -193,13 +218,21 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     _print_step_timing("metadata", step_timings_seconds["metadata"])
 
     step_start = perf_counter()
-    methods = await run_methods_agent(paper_markdown)
+    methods = await run_methods_agent(paper_markdown, guidance=anatomy_guidance)
     step_timings_seconds["methods"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "methods", "seconds": step_timings_seconds["methods"]})
     _print_step_timing("methods", step_timings_seconds["methods"])
 
     step_start = perf_counter()
-    results = await run_results_agent(paper_markdown, paper_type=metadata.paper_type)
+    results_guidance = (
+        f"{anatomy_guidance}\n"
+        f"PRISMA candidates: {anatomy.prisma_flow}\n"
+    )
+    results = await run_results_agent(
+        paper_markdown,
+        paper_type=metadata.paper_type,
+        guidance=results_guidance,
+    )
     if _is_blank(results.paper_type):
         results.paper_type = metadata.paper_type
     step_timings_seconds["results"] = perf_counter() - step_start
@@ -210,12 +243,14 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     if fast_mode:
         data_availability = DataAvailabilityOutput(
             data_accessions=[],
+            related_resources=[],
             data_availability=DataAvailabilityReport(
                 overall_status="not_checked",
                 claimed_repositories=[],
                 verified_repositories=[],
                 discrepancies=["fast_mode: data availability deep checks skipped"],
                 notes="Fast mode enabled: data availability checks skipped.",
+                check_status="not_checked",
             ),
         )
     else:
@@ -223,6 +258,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
             data_availability = await run_data_availability_agent(
                 paper_markdown,
                 paper_type=metadata.paper_type,
+                guidance=anatomy_guidance,
             )
         except Exception as exc:  # noqa: BLE001
             log_event("agent.data_availability.error", {"error": str(exc)})
@@ -283,18 +319,18 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
                     metadata.category, metadata.subcategory
                 )
             elif agent_name == "methods":
-                methods = await run_methods_agent(paper_markdown, guidance=reason)
+                methods = await run_methods_agent(paper_markdown, guidance=f"{reason}\n{anatomy_guidance}")
             elif agent_name == "results":
                 results = await run_results_agent(
                     paper_markdown,
                     paper_type=metadata.paper_type,
-                    guidance=reason,
+                    guidance=f"{reason}\n{results_guidance}",
                 )
             elif agent_name in {"data_availability", "data-availability"}:
                 data_availability = await run_data_availability_agent(
                     paper_markdown,
                     paper_type=metadata.paper_type,
-                    guidance=reason,
+                    guidance=f"{reason}\n{anatomy_guidance}",
                 )
             log_event("pipeline.quality_retry.step", {"agent": agent_name, "reason": reason})
         log_event("pipeline.quality_retry.end", {"notes": quality_check.notes})
@@ -396,6 +432,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         results=results,
         data_accessions=data_availability.data_accessions,
         data_availability=data_availability.data_availability,
+        related_resources=getattr(data_availability, "related_resources", []),
     )
 
     step_start = perf_counter()

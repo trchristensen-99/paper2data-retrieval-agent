@@ -31,7 +31,7 @@ HTML_PAGE = """<!doctype html>
     .card .k { color: #5a6778; font-size: 12px; }
     .card .v { font-size: 21px; font-weight: 700; }
     .filters { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 8px; margin-bottom: 8px; }
-    .filters.advanced { grid-template-columns: repeat(6, minmax(120px, 1fr)); display: none; }
+    .filters.advanced { grid-template-columns: repeat(7, minmax(120px, 1fr)); display: none; }
     .filters.advanced.show { display: grid; }
     input, select, button { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff; }
     button { background: var(--accent); color: #fff; border-color: var(--accent); cursor: pointer; }
@@ -78,6 +78,7 @@ HTML_PAGE = """<!doctype html>
     <div class=\"muted\"><label><input type=\"checkbox\" id=\"show_advanced\" /> Show advanced filters</label></div>
     <div class=\"filters advanced\" id=\"advanced_filters\">
       <select id=\"paper_type\"><option value=\"\">All paper types</option></select>
+      <select id=\"data_check_status\"><option value=\"\">All data check status</option></select>
       <select id=\"repo\"><option value=\"\">All repositories</option></select>
       <select id=\"status\"><option value=\"\">All availability</option></select>
       <select id=\"assay\"><option value=\"\">All assay types</option></select>
@@ -169,6 +170,7 @@ HTML_PAGE = """<!doctype html>
           ['DOI', metadata.doi || ''],
           ['PMID', metadata.pmid || ''],
           ['License', metadata.license || ''],
+          ['Data Check Status', (record.data_availability || {}).check_status || ''],
           ['Field', metadata.category || ''],
           ['Subfield', metadata.subcategory || ''],
           ['Confidence', Number(record.extraction_confidence || 0).toFixed(2)],
@@ -193,6 +195,7 @@ HTML_PAGE = """<!doctype html>
           ['Experimental Findings Count', experimental.length],
           ['Dataset Properties Count', Array.isArray(results.dataset_properties) ? results.dataset_properties.length : 0],
           ['Method Benchmarks Count', Array.isArray(results.method_benchmarks) ? results.method_benchmarks.length : 0],
+          ['Tables Extracted Count', Array.isArray(results.tables_extracted) ? results.tables_extracted.length : 0],
         ],
         data: [
           ['Availability Status', dataAvailability.overall_status || ''],
@@ -201,6 +204,7 @@ HTML_PAGE = """<!doctype html>
           ['Discrepancies', valueToText(dataAvailability.discrepancies || [])],
           ['Data Availability Notes', dataAvailability.notes || ''],
           ['Code Repositories', valueToText(record.code_repositories || [])],
+          ['Related Resources Count', Array.isArray(record.related_resources) ? record.related_resources.length : 0],
           ['Data Accessions Count', accessions.length],
         ],
       };
@@ -313,6 +317,44 @@ HTML_PAGE = """<!doctype html>
       `;
     }
 
+    function renderDatasetProfileTable(record) {
+      const p = (record.results || {}).dataset_profile || null;
+      if (!p) return '<div class=\"muted\">No dataset profile extracted.</div>';
+      const rows = [
+        ['Name', p.name], ['Format', valueToText(p.format || [])], ['Record Count', p.record_count],
+        ['Data Point Count', p.data_point_count], ['Columns', p.columns], ['Temporal Coverage', p.temporal_coverage],
+        ['Source Corpus Size', p.source_corpus_size], ['Dimensions', valueToText(p.dimensions || {})],
+        ['Version', p.version], ['License', p.license], ['Repository Contents', valueToText(p.repository_contents || [])],
+        ['PRISMA Flow', valueToText(p.prisma_flow || {})], ['Processing Pipeline', p.processing_pipeline_summary],
+      ];
+      return renderDetailTable(rows);
+    }
+
+    function renderTablesExtractedTable(record) {
+      const rows = ((record.results || {}).tables_extracted || []);
+      const q = detailFilter.trim().toLowerCase();
+      const filtered = rows.filter(t => {
+        if (!q) return true;
+        return [t.table_id, t.title, valueToText(t.columns || []), t.summary].map(valueToText).join(' ').toLowerCase().includes(q);
+      });
+      if (!filtered.length) return '<div class=\"muted\">No matching extracted tables.</div>';
+      return `
+        <div class=\"subtable-wrap\">
+          <table class=\"subtable\">
+            <thead><tr><th>#</th><th>Table</th><th>Title</th><th>Columns</th><th>Summary</th></tr></thead>
+            <tbody>
+              ${filtered.map((t, i) => `<tr>
+                <td>${i + 1}</td><td>${escapeHtml(valueToText(t.table_id))}</td>
+                <td>${escapeHtml(valueToText(t.title))}</td>
+                <td>${escapeHtml(valueToText(t.columns))}</td>
+                <td>${escapeHtml(valueToText(t.summary))}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
     function renderAccessionsTable(record) {
       const accessions = record.data_accessions || [];
       const q = detailFilter.trim().toLowerCase();
@@ -347,6 +389,30 @@ HTML_PAGE = """<!doctype html>
       `;
     }
 
+    function renderRelatedResourcesTable(record) {
+      const resources = record.related_resources || [];
+      const q = detailFilter.trim().toLowerCase();
+      const filtered = resources.filter(r => {
+        if (!q) return true;
+        return [r.name, r.url, r.type, r.description].map(valueToText).join(' ').toLowerCase().includes(q);
+      });
+      if (!filtered.length) return '<div class=\"muted\">No matching related resources.</div>';
+      return `
+        <div class=\"subtable-wrap\">
+          <table class=\"subtable\">
+            <thead><tr><th>#</th><th>Name</th><th>Type</th><th>URL</th><th>Description</th></tr></thead>
+            <tbody>
+              ${filtered.map((r, i) => `<tr>
+                <td>${i + 1}</td><td>${escapeHtml(valueToText(r.name))}</td>
+                <td>${escapeHtml(valueToText(r.type))}</td><td>${escapeHtml(valueToText(r.url))}</td>
+                <td>${escapeHtml(valueToText(r.description))}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
     function renderResultsTab(record, rows) {
       const synthesized = ((record.results || {}).synthesized_claims || []);
       return `
@@ -357,8 +423,12 @@ HTML_PAGE = """<!doctype html>
         ${renderFindingsTable(record)}
         <div class=\"muted\" style=\"margin-top:8px;\">Dataset properties (filter applies here)</div>
         ${renderDatasetPropertiesTable(record)}
+        <div class=\"muted\" style=\"margin-top:8px;\">Dataset profile</div>
+        ${renderDatasetProfileTable(record)}
         <div class=\"muted\" style=\"margin-top:8px;\">Method benchmarks (filter applies here)</div>
         ${renderMethodBenchmarksTable(record)}
+        <div class=\"muted\" style=\"margin-top:8px;\">Extracted tables (filter applies here)</div>
+        ${renderTablesExtractedTable(record)}
       `;
     }
 
@@ -367,6 +437,8 @@ HTML_PAGE = """<!doctype html>
         ${renderDetailTable(rows)}
         <div class=\"muted\" style=\"margin-top:8px;\">Data accessions (filter applies here)</div>
         ${renderAccessionsTable(record)}
+        <div class=\"muted\" style=\"margin-top:8px;\">Related resources (filter applies here)</div>
+        ${renderRelatedResourcesTable(record)}
       `;
     }
 
@@ -439,6 +511,7 @@ HTML_PAGE = """<!doctype html>
       fillOptions('repo', facets.repositories, 'All repositories');
       fillOptions('status', facets.data_statuses || [], 'All availability');
       fillOptions('paper_type', facets.paper_types || [], 'All paper types');
+      fillOptions('data_check_status', facets.data_check_statuses || [], 'All data check status');
       fillOptions('assay', facets.assay_types || [], 'All assay types');
       fillOptions('organism', facets.organisms || [], 'All organisms');
       fillOptions('field', facets.fields || facets.field_domains || [], 'All fields');
@@ -452,6 +525,7 @@ HTML_PAGE = """<!doctype html>
       const subfield = document.getElementById('subfield').value;
       const journal = document.getElementById('journal').value;
       const paperType = document.getElementById('paper_type').value;
+      const dataCheckStatus = document.getElementById('data_check_status').value;
       const repo = document.getElementById('repo').value;
       const status = document.getElementById('status').value;
       const assay = document.getElementById('assay').value;
@@ -463,6 +537,7 @@ HTML_PAGE = """<!doctype html>
       if (subfield) params.set('subfield', subfield);
       if (journal) params.set('journal', journal);
       if (paperType) params.set('paper_type', paperType);
+      if (dataCheckStatus) params.set('data_check_status', dataCheckStatus);
       if (repo) params.set('repository', repo);
       if (status) params.set('data_status', status);
       if (assay) params.set('assay', assay);
@@ -599,6 +674,7 @@ class _Handler(BaseHTTPRequestHandler):
             q = params.get("q", [""])[0]
             journal = params.get("journal", [""])[0] or None
             paper_type = params.get("paper_type", [""])[0] or None
+            data_check_status = params.get("data_check_status", [""])[0] or None
             repository = params.get("repository", [""])[0] or None
             data_status = params.get("data_status", [""])[0] or None
             assay_type = params.get("assay", [""])[0] or None
@@ -626,6 +702,7 @@ class _Handler(BaseHTTPRequestHandler):
                 q=q,
                 journal=journal,
                 paper_type=paper_type,
+                data_check_status=data_check_status,
                 repository=repository,
                 assay_type=assay_type,
                 organism=organism,

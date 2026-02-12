@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
 
 from pydantic import BaseModel, Field
 from agents import Agent, AgentOutputSchema, Runner
 
-from src.schemas.models import DataAccession, DataAvailabilityReport
+from src.schemas.models import DataAccession, DataAvailabilityReport, RelatedResource
 from src.tools.file_tools import list_ftp_files
 from src.tools.geo_tools import (
     check_geo_accession,
@@ -29,6 +30,7 @@ from src.utils.retry import run_with_rate_limit_retry
 
 class DataAvailabilityOutput(BaseModel):
     data_accessions: list[DataAccession] = Field(default_factory=list)
+    related_resources: list[RelatedResource] = Field(default_factory=list)
     data_availability: DataAvailabilityReport
 
 
@@ -49,6 +51,12 @@ Critical classification rules:
 - Use `category=supplementary_data` for additional downloadable artifacts tied to this paper.
 - Use `category=external_reference` only for cited resources not produced for this paper.
 - Do NOT treat general tools/platforms/search portals (e.g., Jupyter, Render, Covidence, Web of Science) as datasets.
+
+Output rules:
+- Populate fields with extracted data values.
+- Do NOT return JSON schema definitions.
+- Put non-dataset links/resources in `related_resources` with type:
+  visualization | tool | standard | related_dataset.
 """
 
 
@@ -66,6 +74,16 @@ data_availability_agent = Agent(
         estimate_download_time,
     ],
     output_type=AgentOutputSchema(DataAvailabilityOutput, strict_json_schema=False),
+)
+
+data_availability_repair_agent = Agent(
+    name="data_availability_repair_agent",
+    model=MODELS.data_availability,
+    instructions=(
+        DATA_AVAILABILITY_PROMPT
+        + "\n\nReturn only populated JSON data."
+        + "\nDo NOT output schema descriptors like $defs, properties, title, type, items."
+    ),
 )
 
 
@@ -125,6 +143,7 @@ def _classify_accession_category(accession: DataAccession, paper_type: str | Non
         "sra",
         "ena",
         "figshare",
+        "fgshare",
         "zenodo",
         "dryad",
         "osf",
@@ -148,6 +167,91 @@ def _classify_accession_category(accession: DataAccession, paper_type: str | Non
     if acc.startswith(accession_prefixes):
         return "supplementary_data"
     return "external_reference"
+
+
+def _resource_type(name: str, url: str) -> str:
+    text = f"{name} {url}".lower()
+    if any(k in text for k in ("render", "dash", "plotly", "visualization", "sunburst")):
+        return "visualization"
+    if any(k in text for k in ("covidence", "jupyter", "github", "tool", "software")):
+        return "tool"
+    if any(k in text for k in ("oecd", "eu ai act", "standard", "regulation", "guideline")):
+        return "standard"
+    return "related_dataset"
+
+
+def _extract_related_resources_from_text(paper_markdown: str) -> list[RelatedResource]:
+    urls = re.findall(r"https?://[^\s)\]]+", paper_markdown, flags=re.IGNORECASE)
+    out: list[RelatedResource] = []
+    seen: set[str] = set()
+    for url in urls:
+        clean = url.strip().rstrip(".,;")
+        key = clean.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if any(k in key for k in ("figshare", "fgshare", "zenodo", "gse", "sra", "10.6084/m9")):
+            continue
+        name = re.sub(r"^https?://", "", clean).split("/")[0]
+        out.append(
+            RelatedResource(
+                name=name,
+                url=clean,
+                type=_resource_type(name, clean),
+                description="Related resource mentioned in paper.",
+            )
+        )
+    return out
+
+
+def _dedupe_related_resources(resources: list[RelatedResource]) -> list[RelatedResource]:
+    out: list[RelatedResource] = []
+    seen: set[str] = set()
+    for r in resources:
+        key = f"{(r.name or '').strip().lower()}::{(r.url or '').strip().lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
+def _sanitize_data_availability_payload(payload: dict) -> dict:
+    accessions = payload.get("data_accessions")
+    if not isinstance(accessions, list):
+        accessions = []
+    related = payload.get("related_resources")
+    if not isinstance(related, list):
+        related = []
+    report = payload.get("data_availability")
+    if not isinstance(report, dict):
+        report = {
+            "overall_status": "not_checked",
+            "claimed_repositories": [],
+            "verified_repositories": [],
+            "discrepancies": [],
+            "notes": "Repair parser fallback used.",
+            "check_status": "failed",
+        }
+    report.setdefault("check_status", "ok")
+    return {
+        "data_accessions": accessions,
+        "related_resources": related,
+        "data_availability": report,
+    }
+
+
+def _normalize_overall_status(value: str | None) -> str:
+    raw = (value or "").strip().lower()
+    if raw in {"accessible", "partially_accessible", "unavailable", "not_checked"}:
+        return raw
+    if "partial" in raw:
+        return "partially_accessible"
+    if "unavailable" in raw:
+        return "unavailable"
+    if "accessible" in raw:
+        return "accessible"
+    return "not_checked"
 
 
 async def _enrich_accession(accession: DataAccession) -> DataAccession:
@@ -235,6 +339,8 @@ def _extract_candidate_accessions_from_text(
             token = str(match).strip()
             accession_id = token
             url = token if token.startswith("http") else None
+            if repo == "figshare_doi" and not url:
+                url = f"https://doi.org/{token}"
             if repo == "geo" and not url:
                 accession_id = token.upper()
             if repo == "sra" and not url:
@@ -275,14 +381,38 @@ async def run_data_availability_agent(
         )
     if paper_type:
         agent_input = f"[PAPER_TYPE]\n{paper_type}\n\n{agent_input}"
-    result = await run_with_rate_limit_retry(
-        lambda: Runner.run(data_availability_agent, input=agent_input)
-    )
-    output = result.final_output
-    if not isinstance(output, DataAvailabilityOutput):
-        output = DataAvailabilityOutput.model_validate(output)
+    try:
+        result = await run_with_rate_limit_retry(
+            lambda: Runner.run(data_availability_agent, input=agent_input)
+        )
+        output = result.final_output
+        if not isinstance(output, DataAvailabilityOutput):
+            output = DataAvailabilityOutput.model_validate(output)
+    except Exception as exc:  # noqa: BLE001
+        log_event("agent.data_availability.retry_on_parse_error", {"error": str(exc)})
+        repair_input = (
+            f"{agent_input}\n\n"
+            "[FORMAT_FIX]\n"
+            "Return JSON object with keys exactly:\n"
+            "data_accessions, related_resources, data_availability.\n"
+            "Return populated values only. Do NOT return schema objects.\n"
+        )
+        repair_result = await run_with_rate_limit_retry(
+            lambda: Runner.run(data_availability_repair_agent, input=repair_input)
+        )
+        raw = repair_result.final_output
+        if isinstance(raw, DataAvailabilityOutput):
+            output = raw
+        elif isinstance(raw, dict):
+            output = DataAvailabilityOutput.model_validate(_sanitize_data_availability_payload(raw))
+        else:
+            parsed = json.loads(str(raw))
+            if not isinstance(parsed, dict):
+                raise ValueError("data_availability_repair_agent returned non-object JSON")
+            output = DataAvailabilityOutput.model_validate(_sanitize_data_availability_payload(parsed))
     enriched = await _enrich_data_accessions(output.data_accessions)
     kept: list[DataAccession] = []
+    related_from_filtered: list[RelatedResource] = []
     dropped = 0
     for accession in enriched:
         accession.category = _classify_accession_category(accession, paper_type)
@@ -290,6 +420,14 @@ async def run_data_availability_agent(
             accession.data_format = _infer_data_format(accession)
         if accession.category == "external_reference":
             dropped += 1
+            related_from_filtered.append(
+                RelatedResource(
+                    name=accession.repository or accession.accession_id,
+                    url=accession.url,
+                    type=_resource_type(accession.repository or accession.accession_id, accession.url or ""),
+                    description=accession.description,
+                )
+            )
             continue
         kept.append(accession)
     output.data_accessions = kept
@@ -300,6 +438,19 @@ async def run_data_availability_agent(
             output.data_availability.discrepancies.append(
                 "Recovered dataset-like accessions from paper text fallback parser."
             )
+    if not output.related_resources:
+        output.related_resources = _extract_related_resources_from_text(paper_markdown)
+    if related_from_filtered:
+        output.related_resources.extend(related_from_filtered)
+    output.related_resources = _dedupe_related_resources(output.related_resources)
+    output.data_availability.overall_status = _normalize_overall_status(output.data_availability.overall_status)
+    notes_text = (output.data_availability.notes or "").lower()
+    if any(k in notes_text for k in ("could not", "failed", "error", "timeout", "unverified")):
+        output.data_availability.check_status = "failed"
+    elif output.data_accessions and all(x.is_accessible is False for x in output.data_accessions):
+        output.data_availability.check_status = "partial"
+    else:
+        output.data_availability.check_status = "ok"
     if dropped:
         output.data_availability.discrepancies.append(
             f"Filtered {dropped} external reference links from data_accessions."
@@ -329,11 +480,13 @@ async def fallback_data_availability_from_text(
         discrepancies.append("Recovered dataset-like accessions from fallback text parser.")
     return DataAvailabilityOutput(
         data_accessions=enriched,
+        related_resources=_extract_related_resources_from_text(paper_markdown),
         data_availability=DataAvailabilityReport(
             overall_status=status,
             claimed_repositories=sorted({x.repository for x in enriched}),
             verified_repositories=sorted({x.repository for x in enriched if x.is_accessible}),
             discrepancies=discrepancies,
             notes="Fallback data-availability parser used.",
+            check_status="failed",
         ),
     )

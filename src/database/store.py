@@ -94,6 +94,8 @@ def _classify_field_and_subcategory(record: PaperRecord) -> tuple[str, str]:
             " ".join(record.methods.organisms),
             " ".join(record.results.synthesized_claims),
             " ".join([f"{p.property} {p.value}" for p in record.results.dataset_properties]),
+            " ".join(record.results.dataset_profile.repository_contents if record.results.dataset_profile else []),
+            " ".join([t.title or t.table_id for t in record.results.tables_extracted]),
         ]
     ).lower()
     patterns: list[tuple[str, str, tuple[str, ...]]] = [
@@ -209,6 +211,7 @@ class PaperDatabase:
         self._ensure_column("paper_search", "field_domain", "TEXT")
         self._ensure_column("paper_search", "subcategory", "TEXT")
         self._ensure_column("paper_search", "paper_type", "TEXT")
+        self._ensure_column("paper_search", "data_check_status", "TEXT")
         self._normalize_source_count()
         self._backfill_search_and_venue()
         self.conn.commit()
@@ -270,25 +273,36 @@ class PaperDatabase:
         findings = " | ".join(
             [f"{f.claim} {f.metric} {f.value}" for f in record.results.experimental_findings]
             + [f"{d.property} {d.value} {d.context}" for d in record.results.dataset_properties]
+            + (
+                [
+                    f"profile {record.results.dataset_profile.name or ''} "
+                    f"records={record.results.dataset_profile.record_count or ''} "
+                    f"points={record.results.dataset_profile.data_point_count or ''}"
+                ]
+                if record.results.dataset_profile
+                else []
+            )
             + list(record.results.synthesized_claims)
             + [f"{m.task} {m.metric} {m.value}" for m in record.results.method_benchmarks]
         )
         repositories = "; ".join(
             sorted(
                 {x.repository for x in record.data_accessions if x.category != "external_reference"}
+                | {r.name for r in record.related_resources}
                 | set(record.code_repositories)
             )
         )
         assay_types = "; ".join(record.methods.assay_types)
         organisms = "; ".join(record.methods.organisms)
         data_status = record.data_availability.overall_status
+        data_check_status = record.data_availability.check_status
         field_domain, subcategory = _classify_field_and_subcategory(record)
         venue = _infer_venue(record)
         self.conn.execute(
             """
             INSERT INTO paper_search
-            (paper_id, title, authors, journal, keywords, methods, findings, repositories, assay_types, organisms, data_status, field_domain, subcategory, paper_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (paper_id, title, authors, journal, keywords, methods, findings, repositories, assay_types, organisms, data_status, field_domain, subcategory, paper_type, data_check_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(paper_id) DO UPDATE SET
                 title=excluded.title,
                 authors=excluded.authors,
@@ -302,7 +316,8 @@ class PaperDatabase:
                 data_status=excluded.data_status,
                 field_domain=excluded.field_domain,
                 subcategory=excluded.subcategory,
-                paper_type=excluded.paper_type
+                paper_type=excluded.paper_type,
+                data_check_status=excluded.data_check_status
             """,
             (
                 paper_id,
@@ -319,6 +334,7 @@ class PaperDatabase:
                 field_domain,
                 subcategory,
                 (record.metadata.paper_type or record.results.paper_type or "").strip(),
+                data_check_status,
             ),
         )
 
@@ -504,6 +520,7 @@ class PaperDatabase:
         subfield: str | None = None,
         subcategory: str | None = None,
         data_status: str | None = None,
+        data_check_status: str | None = None,
         min_confidence: float | None = None,
         sort_by: str = "updated_at",
         sort_dir: str = "desc",
@@ -552,6 +569,9 @@ class PaperDatabase:
         if data_status:
             clauses.append("s.data_status = ?")
             params.append(data_status)
+        if data_check_status:
+            clauses.append("s.data_check_status = ?")
+            params.append(data_check_status)
         if min_confidence is not None:
             clauses.append("p.extraction_confidence >= ?")
             params.append(min_confidence)
@@ -579,6 +599,7 @@ class PaperDatabase:
                    COALESCE(s.assay_types, '') AS assay_types,
                    COALESCE(s.organisms, '') AS organisms,
                    COALESCE(s.data_status, '') AS data_status,
+                   COALESCE(s.data_check_status, '') AS data_check_status,
                    COALESCE(s.field_domain, '') AS field_domain,
                    COALESCE(s.subcategory, '') AS subcategory
               FROM papers p
@@ -601,7 +622,7 @@ class PaperDatabase:
             """
         ).fetchall()
         repo_rows = self.conn.execute(
-            "SELECT repositories, assay_types, organisms, data_status, field_domain, subcategory, paper_type FROM paper_search"
+            "SELECT repositories, assay_types, organisms, data_status, field_domain, subcategory, paper_type, data_check_status FROM paper_search"
         ).fetchall()
         repo_counts: dict[str, int] = {}
         assay_counts: dict[str, int] = {}
@@ -610,6 +631,7 @@ class PaperDatabase:
         field_counts: dict[str, int] = {}
         subcat_counts: dict[str, int] = {}
         paper_type_counts: dict[str, int] = {}
+        check_status_counts: dict[str, int] = {}
         for row in repo_rows:
             for token in str(row["repositories"] or "").split(";"):
                 repo = token.strip()
@@ -638,6 +660,9 @@ class PaperDatabase:
             paper_type = str(row["paper_type"] or "").strip()
             if paper_type:
                 paper_type_counts[paper_type] = paper_type_counts.get(paper_type, 0) + 1
+            data_check_status = str(row["data_check_status"] or "").strip()
+            if data_check_status:
+                check_status_counts[data_check_status] = check_status_counts.get(data_check_status, 0) + 1
         repositories = [
             {"name": key, "count": value}
             for key, value in sorted(repo_counts.items(), key=lambda item: (-item[1], item[0]))
@@ -666,6 +691,10 @@ class PaperDatabase:
             {"name": key, "count": value}
             for key, value in sorted(paper_type_counts.items(), key=lambda item: (-item[1], item[0]))
         ]
+        data_check_statuses = [
+            {"name": key, "count": value}
+            for key, value in sorted(check_status_counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
         taxonomy = {
             category: [{"name": sub, "count": subcat_counts.get(sub, 0)} for sub in subcats]
             for category, subcats in FIELD_SUBFIELD.items()
@@ -679,6 +708,7 @@ class PaperDatabase:
             "fields": field_domains,
             "subfields": subfields,
             "paper_types": paper_types,
+            "data_check_statuses": data_check_statuses,
             "field_subfields": taxonomy,
             # Backward compatibility for older UI clients.
             "field_domains": field_domains,
