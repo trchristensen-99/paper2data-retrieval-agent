@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from src.database.store import PaperDatabase
@@ -293,7 +293,7 @@ class _Handler(BaseHTTPRequestHandler):
 def run_server(db_path: str, host: str, port: int) -> None:
     db = PaperDatabase(db_path)
     _Handler.db = db
-    server = ThreadingHTTPServer((host, port), _Handler)
+    server = HTTPServer((host, port), _Handler)
     print(f"Paper2Data web UI: http://{host}:{port}")
     try:
         server.serve_forever()
