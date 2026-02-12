@@ -288,6 +288,88 @@ class PaperDatabase:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def list_papers(
+        self,
+        *,
+        q: str = "",
+        journal: str | None = None,
+        repository: str | None = None,
+        min_confidence: float | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        if q.strip():
+            like = f"%{q.strip()}%"
+            clauses.append(
+                """(
+                    p.title LIKE ?
+                    OR p.doi LIKE ?
+                    OR p.pmid LIKE ?
+                    OR s.authors LIKE ?
+                    OR s.keywords LIKE ?
+                    OR s.methods LIKE ?
+                    OR s.findings LIKE ?
+                    OR s.repositories LIKE ?
+                )"""
+            )
+            params.extend([like, like, like, like, like, like, like, like])
+        if journal:
+            clauses.append("p.journal = ?")
+            params.append(journal)
+        if repository:
+            clauses.append("s.repositories LIKE ?")
+            params.append(f"%{repository}%")
+        if min_confidence is not None:
+            clauses.append("p.extraction_confidence >= ?")
+            params.append(min_confidence)
+
+        where_sql = ""
+        if clauses:
+            where_sql = "WHERE " + " AND ".join(clauses)
+
+        rows = self.conn.execute(
+            f"""
+            SELECT p.paper_id, p.title, p.doi, p.pmid, p.journal, p.publication_date,
+                   p.extraction_confidence, p.source_count,
+                   COALESCE(s.repositories, '') AS repositories
+              FROM papers p
+              LEFT JOIN paper_search s ON s.paper_id = p.paper_id
+              {where_sql}
+             ORDER BY p.updated_at DESC
+             LIMIT ?
+            """,
+            tuple(params + [limit]),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def facet_options(self) -> dict[str, Any]:
+        journal_rows = self.conn.execute(
+            """
+            SELECT COALESCE(journal, 'Unknown') AS journal, COUNT(*) AS count
+              FROM papers
+             GROUP BY COALESCE(journal, 'Unknown')
+             ORDER BY count DESC, journal ASC
+            """
+        ).fetchall()
+        repo_rows = self.conn.execute("SELECT repositories FROM paper_search").fetchall()
+        repo_counts: dict[str, int] = {}
+        for row in repo_rows:
+            for token in str(row["repositories"] or "").split(";"):
+                repo = token.strip()
+                if not repo:
+                    continue
+                repo_counts[repo] = repo_counts.get(repo, 0) + 1
+        repositories = [
+            {"name": key, "count": value}
+            for key, value in sorted(repo_counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
+        return {
+            "journals": [dict(r) for r in journal_rows],
+            "repositories": repositories,
+        }
+
     def fetch_paper(self, paper_id: str) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT * FROM papers WHERE paper_id = ?", (paper_id,)).fetchone()
         if not row:
