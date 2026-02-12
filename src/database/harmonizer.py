@@ -8,6 +8,7 @@ from agents import Agent, AgentOutputSchema, Runner
 from pydantic import BaseModel, Field
 
 from src.schemas.models import DataAccession, DataAvailabilityReport, PaperRecord
+from src.utils.config import MODELS
 from src.utils.retry import run_with_rate_limit_retry
 
 
@@ -21,7 +22,7 @@ class HarmonizationOutput(BaseModel):
 
 harmonizer_agent = Agent(
     name="record_harmonizer_agent",
-    model="gpt-4.1-mini",
+    model=MODELS.harmonizer,
     instructions=(
         "Merge two PaperRecord objects for the same paper into one canonical record. "
         "Resolve semantic duplicates (e.g., H. sapiens vs Homo sapiens). "

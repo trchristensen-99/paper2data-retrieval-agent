@@ -14,13 +14,28 @@ Multi-agent scientific paper retrieval pipeline for the Paper2Data project.
 3. Run pipeline:
    - `uv run python -m src.main ../data_for_agents_example/data_for_retrieval_agent/s41597-021-00905-y.md`
 
+## Model Configuration
+- Default model for all agents is `gpt-5-nano` (cost-optimized).
+- Override globally:
+  - `P2D_DEFAULT_MODEL=<model_name>`
+- Override individual agents if needed:
+  - `P2D_MODEL_METADATA`
+  - `P2D_MODEL_METHODS`
+  - `P2D_MODEL_RESULTS`
+  - `P2D_MODEL_DATA_AVAILABILITY`
+  - `P2D_MODEL_QUALITY`
+  - `P2D_MODEL_METADATA_ENRICHMENT`
+  - `P2D_MODEL_SYNTHESIS`
+  - `P2D_MODEL_MANAGER`
+  - `P2D_MODEL_HARMONIZER`
+
 ## Architecture
 - Manager agent orchestrates:
-  1. Metadata Agent (`gpt-4.1-mini`)
-  2. Methods Agent (`gpt-4.1`)
-  3. Results Agent (`gpt-4.1`)
-  4. Data Availability Agent (`gpt-4.1` + tools)
-  5. Synthesis Agent (`gpt-4.1`)
+  1. Metadata Agent (`gpt-5-nano` by default)
+  2. Methods Agent (`gpt-5-nano` by default)
+  3. Results Agent (`gpt-5-nano` by default)
+  4. Data Availability Agent (`gpt-5-nano` by default + tools)
+  5. Synthesis Agent (`gpt-5-nano` by default)
 
 All agent interactions are logged for debugging in output retrieval logs.
 
