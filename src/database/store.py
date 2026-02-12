@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from src.database.harmonizer import harmonize_records
 from src.schemas.models import PaperRecord
-from src.utils.taxonomy import CATEGORY_SUBCATEGORY, normalize_category_subcategory
+from src.utils.taxonomy import FIELD_SUBFIELD, normalize_category_subcategory
 
 
 def _norm_text(value: str) -> str:
@@ -102,17 +102,21 @@ def _classify_field_and_subcategory(record: PaperRecord) -> tuple[str, str]:
         ("biology", "genomics", ("genome", "rna-seq", "chip-seq", "atac-seq", "single-cell")),
         ("biology", "neuroscience", ("neuro", "brain", "synapse")),
         ("biology", "immunology", ("immune", "immun", "t-cell", "b-cell")),
-        ("environmental", "climate", ("climate", "weather", "cordex", "temperature", "precip")),
-        ("environmental", "ecology", ("ecology", "biodiversity", "species distribution")),
-        ("computational", "bioinformatics", ("bioinformatic", "pipeline", "algorithm", "machine learning")),
-        ("clinical", "translational", ("patient", "clinical", "cohort", "trial")),
+        ("climate_science", "climate_modeling", ("climate", "weather", "cordex", "temperature", "precip")),
+        ("environmental_science", "ecology", ("ecology", "biodiversity", "species distribution")),
+        ("data_science_ai", "machine_learning", ("machine learning", "deep learning", "neural network")),
+        ("computer_science", "theory_algorithms", ("algorithm", "complexity", "optimization")),
+        ("medicine_health", "clinical_medicine", ("patient", "clinical", "cohort", "trial")),
+        ("earth_science", "geology", ("geolog", "sediment", "tectonic")),
+        ("economics_finance", "economics", ("economic", "gdp", "market")),
+        ("linguistics_language", "language_technology", ("language model", "nlp", "linguistic")),
     ]
     for field_domain, subcategory, keys in patterns:
         if any(k in text for k in keys):
             return field_domain, subcategory
     if record.methods.organisms:
         return normalize_category_subcategory("biology", "general_biology")
-    return normalize_category_subcategory("general_science", "uncategorized")
+    return normalize_category_subcategory("interdisciplinary", "uncategorized")
 
 
 def compute_paper_key(record: PaperRecord) -> str:
@@ -487,6 +491,7 @@ class PaperDatabase:
         assay_type: str | None = None,
         organism: str | None = None,
         field_domain: str | None = None,
+        subfield: str | None = None,
         subcategory: str | None = None,
         data_status: str | None = None,
         min_confidence: float | None = None,
@@ -527,9 +532,10 @@ class PaperDatabase:
         if field_domain:
             clauses.append("s.field_domain = ?")
             params.append(field_domain)
-        if subcategory:
+        active_subfield = subfield or subcategory
+        if active_subfield:
             clauses.append("s.subcategory = ?")
-            params.append(subcategory)
+            params.append(active_subfield)
         if data_status:
             clauses.append("s.data_status = ?")
             params.append(data_status)
@@ -633,15 +639,15 @@ class PaperDatabase:
         ]
         field_domains = [
             {"name": key, "count": field_counts.get(key, 0)}
-            for key in CATEGORY_SUBCATEGORY.keys()
+            for key in FIELD_SUBFIELD.keys()
         ]
-        subcategories = [
+        subfields = [
             {"name": key, "count": value}
             for key, value in sorted(subcat_counts.items(), key=lambda item: (-item[1], item[0]))
         ]
         taxonomy = {
             category: [{"name": sub, "count": subcat_counts.get(sub, 0)} for sub in subcats]
-            for category, subcats in CATEGORY_SUBCATEGORY.items()
+            for category, subcats in FIELD_SUBFIELD.items()
         }
         return {
             "journals": [dict(r) for r in journal_rows],
@@ -649,8 +655,12 @@ class PaperDatabase:
             "assay_types": assay_types,
             "organisms": organisms,
             "data_statuses": data_statuses,
+            "fields": field_domains,
+            "subfields": subfields,
+            "field_subfields": taxonomy,
+            # Backward compatibility for older UI clients.
             "field_domains": field_domains,
-            "subcategories": subcategories,
+            "subcategories": subfields,
             "category_subcategories": taxonomy,
         }
 

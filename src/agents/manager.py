@@ -158,7 +158,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         )
         if not fast_mode:
             taxonomy_guidance = (
-                "Category/subcategory invalid. Select one exact pair from allowed taxonomy only."
+                "Field/subfield invalid. Select one exact pair from allowed taxonomy only."
             )
             repaired = await run_metadata_agent(paper_markdown, guidance=taxonomy_guidance)
             metadata.category = repaired.category

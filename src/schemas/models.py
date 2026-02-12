@@ -87,11 +87,11 @@ class MetadataRecord(BaseModel):
     conflicts_of_interest: Optional[str] = None
     category: Optional[str] = Field(
         default=None,
-        description="Fixed top-level category (biology/computational/environmental/clinical/general_science)",
+        description="Fixed top-level field (e.g., biology, chemistry, physics, computer_science, mathematics_statistics, social_science, interdisciplinary)",
     )
     subcategory: Optional[str] = Field(
         default=None,
-        description="Fixed subcategory within the selected category",
+        description="Fixed subfield within the selected field",
     )
 
     @field_validator("authors", "keywords", "funding_sources", mode="before")
@@ -105,6 +105,7 @@ class ResultsSummary(BaseModel):
     qualitative_findings: list[str]
     key_figures: list[FigureSummary] = []
     spin_assessment: str = Field(
+        default="not_assessed",
         description="Brief note on whether author claims match the raw data"
     )
 

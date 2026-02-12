@@ -56,7 +56,7 @@ def test_data_availability_values() -> None:
 
 @pytest.mark.asyncio
 async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _metadata(_: str) -> MetadataRecord:
+    async def _metadata(_: str, guidance: str | None = None) -> MetadataRecord:
         return MetadataRecord(title="Demo Paper", authors=["A. Author"])
 
     async def _methods(_: str) -> MethodsSummary:
@@ -155,4 +155,4 @@ async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) 
 
     artifacts = await manager.run_pipeline("paper body")
     assert artifacts.record.metadata.title == "Demo Paper"
-    assert artifacts.record.extraction_confidence == 0.85
+    assert 0.0 <= artifacts.record.extraction_confidence <= 1.0

@@ -21,7 +21,7 @@ Critical:
 - If venue is unclear from markdown, call tools to validate DOI/PMID and venue.
 - Return `keywords` as a list (possibly empty), never null.
 
-Category taxonomy (must use only these values):
+Field/subfield taxonomy (must use only these values):
 """ + all_categories_text() + """
 """
 

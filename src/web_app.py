@@ -54,11 +54,11 @@ HTML_PAGE = """<!doctype html>
   <div class=\"wrap\">
     <h1>Paper2Data Terminal</h1>
     <div class=\"grid\" id=\"summary\"></div>
-    <div class=\"muted\">Use field/subcategory in main filters. Repositories and assay-level filters are in advanced filters.</div>
+    <div class=\"muted\">Use field/subfield in main filters. Repositories and assay-level filters are in advanced filters.</div>
     <div class=\"filters\">
       <input id=\"q\" placeholder=\"Search title, DOI, methods, findings...\" />
       <select id=\"field\"><option value=\"\">All fields</option></select>
-      <select id=\"subcategory\"><option value=\"\">All subcategories</option></select>
+      <select id=\"subfield\"><option value=\"\">All subfields</option></select>
       <select id=\"journal\"><option value=\"\">All journals</option></select>
       <button id=\"run\">Run</button>
     </div>
@@ -89,7 +89,7 @@ HTML_PAGE = """<!doctype html>
   <script>
     let sortBy = 'updated_at';
     let sortDir = 'desc';
-    let categorySubcategories = {};
+    let fieldSubfields = {};
 
     function fillOptions(id, items, placeholder) {
       const el = document.getElementById(id);
@@ -110,11 +110,11 @@ HTML_PAGE = """<!doctype html>
 
     function fillSubcategoryOptions() {
       const field = document.getElementById('field').value;
-      const list = field && categorySubcategories[field] ? categorySubcategories[field] : [];
-      const selected = document.getElementById('subcategory').value;
-      fillOptions('subcategory', list, 'All subcategories');
+      const list = field && fieldSubfields[field] ? fieldSubfields[field] : [];
+      const selected = document.getElementById('subfield').value;
+      fillOptions('subfield', list, 'All subfields');
       if (list.some(x => x.name === selected)) {
-        document.getElementById('subcategory').value = selected;
+        document.getElementById('subfield').value = selected;
       }
     }
 
@@ -122,7 +122,7 @@ HTML_PAGE = """<!doctype html>
       const [statsRes, facetsRes] = await Promise.all([fetch('/api/summary'), fetch('/api/facets')]);
       const stats = await statsRes.json();
       const facets = await facetsRes.json();
-      categorySubcategories = facets.category_subcategories || {};
+      fieldSubfields = facets.field_subfields || facets.category_subcategories || {};
       document.getElementById('summary').innerHTML = [
         ['Papers', stats.papers],
         ['DB Path', stats.db_path]
@@ -133,7 +133,7 @@ HTML_PAGE = """<!doctype html>
       fillOptions('status', facets.data_statuses || [], 'All availability');
       fillOptions('assay', facets.assay_types || [], 'All assay types');
       fillOptions('organism', facets.organisms || [], 'All organisms');
-      fillOptions('field', facets.field_domains || [], 'All fields');
+      fillOptions('field', facets.fields || facets.field_domains || [], 'All fields');
       fillSubcategoryOptions();
     }
 
@@ -141,7 +141,7 @@ HTML_PAGE = """<!doctype html>
       const params = new URLSearchParams();
       const q = document.getElementById('q').value.trim();
       const field = document.getElementById('field').value;
-      const subcategory = document.getElementById('subcategory').value;
+      const subfield = document.getElementById('subfield').value;
       const journal = document.getElementById('journal').value;
       const repo = document.getElementById('repo').value;
       const status = document.getElementById('status').value;
@@ -151,7 +151,7 @@ HTML_PAGE = """<!doctype html>
 
       if (q) params.set('q', q);
       if (field) params.set('field_domain', field);
-      if (subcategory) params.set('subcategory', subcategory);
+      if (subfield) params.set('subfield', subfield);
       if (journal) params.set('journal', journal);
       if (repo) params.set('repository', repo);
       if (status) params.set('data_status', status);
@@ -228,7 +228,7 @@ HTML_PAGE = """<!doctype html>
       applyFieldBehavior();
       runQuery();
     };
-    document.getElementById('subcategory').onchange = runQuery;
+    document.getElementById('subfield').onchange = runQuery;
     document.getElementById('show_advanced').onchange = (ev) => {
       const panel = document.getElementById('advanced_filters');
       panel.classList.toggle('show', ev.target.checked);
@@ -290,6 +290,7 @@ class _Handler(BaseHTTPRequestHandler):
             assay_type = params.get("assay", [""])[0] or None
             organism = params.get("organism", [""])[0] or None
             field_domain = params.get("field_domain", [""])[0] or None
+            subfield = params.get("subfield", [""])[0] or None
             subcategory = params.get("subcategory", [""])[0] or None
             min_confidence_raw = params.get("min_confidence", [""])[0]
             limit_raw = params.get("limit", ["100"])[0]
@@ -314,6 +315,7 @@ class _Handler(BaseHTTPRequestHandler):
                 assay_type=assay_type,
                 organism=organism,
                 field_domain=field_domain,
+                subfield=subfield,
                 subcategory=subcategory,
                 data_status=data_status,
                 min_confidence=min_confidence,
