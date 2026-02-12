@@ -23,3 +23,19 @@ Multi-agent scientific paper retrieval pipeline for the Paper2Data project.
   5. Synthesis Agent (`gpt-4.1`)
 
 All agent interactions are logged for debugging in output retrieval logs.
+
+## Queryable Database
+You can ingest extraction outputs into a persistent SQLite database that supports search and record harmonization.
+
+- Initialize DB (creates it if missing):
+  - `uv run python -m src.database_cli --db outputs/paper_terminal.db init`
+- Ingest one file or a directory of extraction runs:
+  - `uv run python -m src.database_cli --db outputs/paper_terminal.db ingest --input outputs`
+- Search:
+  - `uv run python -m src.database_cli --db outputs/paper_terminal.db query --q "wildfire figshare"`
+- Inspect one record:
+  - `uv run python -m src.database_cli --db outputs/paper_terminal.db show --paper-id <paper_id>`
+- DB stats:
+  - `uv run python -m src.database_cli --db outputs/paper_terminal.db stats`
+
+When a new entry matches an existing paper (by DOI, PMID, or normalized title), records are harmonized using an AI merge agent with deterministic fallback rules.
