@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -49,7 +49,7 @@ class MethodsSummary(BaseModel):
     organisms: list[str]
     cell_types: list[str]
     assay_types: list[str]
-    sample_sizes: dict[str, str]
+    sample_sizes: dict[str, Any]
     statistical_tests: list[str]
     experimental_design: str
     methods_completeness: str = Field(

@@ -9,6 +9,7 @@ from src.tools.geo_tools import check_geo_accession, check_sra_accession
 from src.tools.http_tools import check_url
 from src.utils.config import MODELS
 from src.utils.logging import log_event
+from src.utils.retry import run_with_rate_limit_retry
 
 
 class DataAvailabilityOutput(BaseModel):
@@ -38,7 +39,9 @@ data_availability_agent = Agent(
 
 async def run_data_availability_agent(paper_markdown: str) -> DataAvailabilityOutput:
     log_event("agent.data_availability.start", {"chars": len(paper_markdown)})
-    result = await Runner.run(data_availability_agent, input=paper_markdown)
+    result = await run_with_rate_limit_retry(
+        lambda: Runner.run(data_availability_agent, input=paper_markdown)
+    )
     output = result.final_output
     if not isinstance(output, DataAvailabilityOutput):
         output = DataAvailabilityOutput.model_validate(output)

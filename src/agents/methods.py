@@ -5,6 +5,7 @@ from agents import Agent, AgentOutputSchema, Runner
 from src.schemas.models import MethodsSummary
 from src.utils.config import MODELS
 from src.utils.logging import log_event
+from src.utils.retry import run_with_rate_limit_retry
 
 METHODS_PROMPT = """Extract methods details needed for statistical assessment:
 - organisms, cell types, assay types
@@ -26,7 +27,9 @@ methods_agent = Agent(
 
 async def run_methods_agent(paper_markdown: str) -> MethodsSummary:
     log_event("agent.methods.start", {"chars": len(paper_markdown)})
-    result = await Runner.run(methods_agent, input=paper_markdown)
+    result = await run_with_rate_limit_retry(
+        lambda: Runner.run(methods_agent, input=paper_markdown)
+    )
     output = result.final_output
     if not isinstance(output, MethodsSummary):
         output = MethodsSummary.model_validate(output)

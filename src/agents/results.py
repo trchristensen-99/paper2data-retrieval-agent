@@ -5,6 +5,7 @@ from agents import Agent, AgentOutputSchema, Runner
 from src.schemas.models import ResultsSummary
 from src.utils.config import MODELS
 from src.utils.logging import log_event
+from src.utils.retry import run_with_rate_limit_retry
 
 RESULTS_PROMPT = """You are the No-Spin Zone results extractor.
 Extract quantitative findings as raw facts only.
@@ -26,7 +27,9 @@ results_agent = Agent(
 
 async def run_results_agent(paper_markdown: str) -> ResultsSummary:
     log_event("agent.results.start", {"chars": len(paper_markdown)})
-    result = await Runner.run(results_agent, input=paper_markdown)
+    result = await run_with_rate_limit_retry(
+        lambda: Runner.run(results_agent, input=paper_markdown)
+    )
     output = result.final_output
     if not isinstance(output, ResultsSummary):
         output = ResultsSummary.model_validate(output)

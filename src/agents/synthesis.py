@@ -8,6 +8,7 @@ from agents import Agent, AgentOutputSchema, Runner
 from src.schemas.models import PaperRecord, SynthesisInput, SynthesisOutput
 from src.utils.config import AGENT_VERSION, MODELS
 from src.utils.logging import events_as_markdown, log_event
+from src.utils.retry import run_with_rate_limit_retry
 
 SYNTHESIS_PROMPT = """Merge extracted outputs into one PaperRecord.
 Generate:
@@ -26,7 +27,9 @@ synthesis_agent = Agent(
 
 async def run_synthesis_agent(payload: SynthesisInput) -> SynthesisOutput:
     log_event("agent.synthesis.start", {"payload": "received"})
-    result = await Runner.run(synthesis_agent, input=payload.model_dump_json(indent=2))
+    result = await run_with_rate_limit_retry(
+        lambda: Runner.run(synthesis_agent, input=payload.model_dump_json(indent=2))
+    )
     output = result.final_output
     if not isinstance(output, SynthesisOutput):
         output = SynthesisOutput.model_validate(output)
