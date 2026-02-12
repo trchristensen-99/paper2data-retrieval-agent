@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from src.database.harmonizer import harmonize_records
 from src.schemas.models import PaperRecord
+from src.utils.taxonomy import normalize_category_subcategory
 
 
 def _norm_text(value: str) -> str:
@@ -43,10 +44,14 @@ def _extract_domain(value: str | None) -> str | None:
 
 def _infer_venue(record: PaperRecord) -> str:
     journal = (record.metadata.journal or "").strip()
+    doi_lower = (record.metadata.doi or "").strip().lower()
     if journal:
-        return journal
+        if journal.lower() == "scientific data" and doi_lower and not doi_lower.startswith("10.1038/s41597"):
+            journal = ""
+        else:
+            return journal
 
-    doi = (record.metadata.doi or "").lower().strip()
+    doi = doi_lower
     if doi.startswith("10.48550/"):
         return "arXiv"
     if doi.startswith("10.1101/"):
@@ -68,6 +73,9 @@ def _infer_venue(record: PaperRecord) -> str:
 
 
 def _classify_field_and_subcategory(record: PaperRecord) -> tuple[str, str]:
+    if record.metadata.category or record.metadata.subcategory:
+        return normalize_category_subcategory(record.metadata.category, record.metadata.subcategory)
+
     text = " ".join(
         [
             record.metadata.title or "",
@@ -94,8 +102,8 @@ def _classify_field_and_subcategory(record: PaperRecord) -> tuple[str, str]:
         if any(k in text for k in keys):
             return field_domain, subcategory
     if record.methods.organisms:
-        return "biology", "general_biology"
-    return "general_science", "uncategorized"
+        return normalize_category_subcategory("biology", "general_biology")
+    return normalize_category_subcategory("general_science", "uncategorized")
 
 
 def compute_paper_key(record: PaperRecord) -> str:
@@ -479,7 +487,6 @@ class PaperDatabase:
             "publication_date": "p.publication_date",
             "extraction_confidence": "p.extraction_confidence",
             "source_count": "p.source_count",
-            "version_count": "version_count",
             "updated_at": "p.updated_at",
         }
         sort_col = sort_cols.get(sort_by, "p.updated_at")
@@ -489,7 +496,6 @@ class PaperDatabase:
             f"""
             SELECT p.paper_id, p.title, p.doi, p.pmid, p.journal, p.publication_date,
                    p.extraction_confidence, p.source_count,
-                   (SELECT COUNT(*) FROM paper_versions v WHERE v.paper_id = p.paper_id) AS version_count,
                    COALESCE(s.repositories, '') AS repositories,
                    COALESCE(s.assay_types, '') AS assay_types,
                    COALESCE(s.organisms, '') AS organisms,

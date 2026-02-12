@@ -11,10 +11,12 @@ from src.utils.logging import log_event
 from src.utils.retry import run_with_rate_limit_retry
 
 ENRICHMENT_PROMPT = """Use tool calls to enrich missing bibliographic metadata.
-Primary targets: DOI and PMID.
+Primary targets: DOI, PMID, and publication venue (journal/preprint/source website).
 
 Rules:
 - Prefer exact title matches.
+- Trust Crossref venue only when `is_high_confidence_match=true` (or exact DOI match).
+- If Crossref/PubMed evidence conflicts with extracted journal, prefer evidence-backed venue.
 - If uncertain, leave fields null and explain uncertainty in notes.
 - Do not overwrite high-confidence existing values; only return inferred additions.
 """
@@ -37,7 +39,7 @@ async def run_metadata_enrichment_agent(
         "metadata": metadata.model_dump(),
         "paper_title": metadata.title,
         "paper_excerpt": paper_markdown[:5000],
-        "task": "Find missing DOI/PMID/journal/publication_date using tools.",
+        "task": "Find missing DOI/PMID/journal/publication_date using tools. Resolve venue if extracted value is suspicious.",
     }
     result = await run_with_rate_limit_retry(
         lambda: Runner.run(metadata_enrichment_agent, input=json.dumps(payload))

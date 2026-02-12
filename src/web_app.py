@@ -30,7 +30,9 @@ HTML_PAGE = """<!doctype html>
     .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
     .card .k { color: #5a6778; font-size: 12px; }
     .card .v { font-size: 21px; font-weight: 700; }
-    .filters { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr auto; gap: 8px; margin-bottom: 10px; }
+    .filters { display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 8px; margin-bottom: 8px; }
+    .filters.advanced { grid-template-columns: repeat(6, minmax(120px, 1fr)); display: none; }
+    .filters.advanced.show { display: grid; }
     input, select, button { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff; }
     button { background: var(--accent); color: #fff; border-color: var(--accent); cursor: pointer; }
     table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
@@ -41,8 +43,9 @@ HTML_PAGE = """<!doctype html>
     pre { white-space: pre-wrap; word-break: break-word; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 0; max-height: 560px; overflow: auto; }
     .muted { color: #5a6778; font-size: 12px; margin: 6px 0 12px; }
     @media (max-width: 900px) {
-      .grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+    .grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
       .filters { grid-template-columns: 1fr; }
+      .filters.advanced { grid-template-columns: 1fr; }
       .split { grid-template-columns: 1fr; }
     }
   </style>
@@ -51,18 +54,21 @@ HTML_PAGE = """<!doctype html>
   <div class=\"wrap\">
     <h1>Paper2Data Terminal</h1>
     <div class=\"grid\" id=\"summary\"></div>
-    <div class=\"muted\">Use Field + Subcategory to focus domain-specific filters.</div>
+    <div class=\"muted\">Use optional advanced filters for domain-specific narrowing.</div>
     <div class=\"filters\">
       <input id=\"q\" placeholder=\"Search title, DOI, methods, findings...\" />
-      <select id=\"field\"><option value=\"\">All fields</option></select>
-      <select id=\"subcategory\"><option value=\"\">All subcategories</option></select>
       <select id=\"journal\"><option value=\"\">All journals</option></select>
       <select id=\"repo\"><option value=\"\">All repositories</option></select>
+      <button id=\"run\">Run</button>
+    </div>
+    <div class=\"muted\"><label><input type=\"checkbox\" id=\"show_advanced\" /> Show advanced filters</label></div>
+    <div class=\"filters advanced\" id=\"advanced_filters\">
+      <select id=\"field\"><option value=\"\">All fields</option></select>
+      <select id=\"subcategory\"><option value=\"\">All subcategories</option></select>
       <select id=\"status\"><option value=\"\">All availability</option></select>
       <select id=\"assay\"><option value=\"\">All assay types</option></select>
       <select id=\"organism\"><option value=\"\">All organisms</option></select>
       <input id=\"min_conf\" type=\"number\" min=\"0\" max=\"1\" step=\"0.01\" placeholder=\"Min conf (0-1)\" />
-      <button id=\"run\">Run</button>
     </div>
     <div class=\"split\">
       <table>
@@ -72,14 +78,13 @@ HTML_PAGE = """<!doctype html>
             <th class=\"sortable\" data-sort=\"journal\">Journal</th>
             <th class=\"sortable\" data-sort=\"publication_date\">Date</th>
             <th class=\"sortable\" data-sort=\"extraction_confidence\">Conf</th>
-            <th class=\"sortable\" data-sort=\"version_count\">Versions</th>
           </tr>
         </thead>
         <tbody id=\"rows\"></tbody>
       </table>
       <pre id=\"detail\">Select a paper to view full structured JSON.</pre>
     </div>
-    <div class=\"muted\" id=\"status\"></div>
+    <div class=\"muted\" id=\"status_msg\"></div>
   </div>
   <script>
     let sortBy = 'updated_at';
@@ -107,7 +112,6 @@ HTML_PAGE = """<!doctype html>
       const facets = await facetsRes.json();
       document.getElementById('summary').innerHTML = [
         ['Papers', stats.papers],
-        ['Versions', stats.versions],
         ['Paper Sources', stats.total_sources],
         ['DB Path', stats.db_path]
       ].map(([k,v]) => `<div class=\"card\"><div class=\"k\">${k}</div><div class=\"v\">${v}</div></div>`).join('');
@@ -149,19 +153,19 @@ HTML_PAGE = """<!doctype html>
       const res = await fetch('/api/papers?' + params.toString());
       const rows = await res.json();
       const tbody = document.getElementById('rows');
-      const statusMsg = document.getElementById('status');
+      const statusMsg = document.getElementById('status_msg');
       tbody.innerHTML = '';
       if (!Array.isArray(rows)) {
         const error = rows && rows.error ? rows.error : 'Unexpected API response';
         statusMsg.textContent = `Query failed: ${error}`;
-        tbody.innerHTML = '<tr><td colspan=\"5\">Query error. Check status below.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan=\"4\">Query error. Check status below.</td></tr>';
         return;
       }
       statusMsg.textContent = `Matched ${rows.length} paper(s). sort=${sortBy} ${sortDir}.`;
 
       rows.forEach(row => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${row.title || ''}</td><td>${row.journal || ''}</td><td>${row.publication_date || ''}</td><td>${(row.extraction_confidence ?? '').toString()}</td><td>${row.version_count ?? 1}</td>`;
+        tr.innerHTML = `<td>${row.title || ''}</td><td>${row.journal || ''}</td><td>${row.publication_date || ''}</td><td>${(row.extraction_confidence ?? '').toString()}</td>`;
         tr.onclick = async () => {
           const detailRes = await fetch('/api/paper/' + row.paper_id);
           const detail = await detailRes.json();
@@ -171,7 +175,7 @@ HTML_PAGE = """<!doctype html>
       });
 
       if (rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan=\"5\">No papers matched.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan=\"4\">No papers matched.</td></tr>';
       }
     }
 
@@ -207,6 +211,10 @@ HTML_PAGE = """<!doctype html>
     document.getElementById('field').onchange = () => {
       applyFieldBehavior();
       runQuery();
+    };
+    document.getElementById('show_advanced').onchange = (ev) => {
+      const panel = document.getElementById('advanced_filters');
+      panel.classList.toggle('show', ev.target.checked);
     };
     window.onload = async () => {
       await loadSummary();

@@ -70,6 +70,14 @@ class MetadataRecord(BaseModel):
     keywords: list[str] = []
     funding_sources: list[str] = []
     conflicts_of_interest: Optional[str] = None
+    category: Optional[str] = Field(
+        default=None,
+        description="Fixed top-level category (biology/computational/environmental/clinical/general_science)",
+    )
+    subcategory: Optional[str] = Field(
+        default=None,
+        description="Fixed subcategory within the selected category",
+    )
 
 
 class ResultsSummary(BaseModel):

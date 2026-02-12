@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from difflib import SequenceMatcher
+
 import httpx
 from agents import function_tool
 
@@ -15,6 +17,9 @@ async def search_crossref_by_title(title: str) -> dict:
         "journal": None,
         "publication_date": None,
         "score": None,
+        "matched_title": None,
+        "title_similarity": None,
+        "is_high_confidence_match": False,
         "error": None,
     }
     try:
@@ -28,6 +33,12 @@ async def search_crossref_by_title(title: str) -> dict:
             if items:
                 top = items[0]
                 result["doi"] = top.get("DOI")
+                titles = top.get("title") or []
+                if titles:
+                    result["matched_title"] = titles[0]
+                    sim = SequenceMatcher(None, title.lower(), str(titles[0]).lower()).ratio()
+                    result["title_similarity"] = round(sim, 4)
+                    result["is_high_confidence_match"] = bool(sim >= 0.82)
                 container = top.get("container-title") or []
                 if container:
                     result["journal"] = container[0]

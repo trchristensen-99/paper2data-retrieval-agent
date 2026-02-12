@@ -55,13 +55,21 @@ You can ingest extraction outputs into a persistent SQLite database that support
 - Local web UI (summary + search/filter + full record JSON viewer):
   - `uv run python -m src.web_app --db outputs/paper_terminal.db --host 127.0.0.1 --port 8080`
   - Open `http://127.0.0.1:8080`
-  - Includes sortable columns and filters for field domain, subcategory, journal/source venue, repository, data availability status, assay type, organism, and confidence threshold.
+  - Includes sortable columns and optional advanced filters for category, subcategory, journal/source venue, repository, data availability status, assay type, organism, and confidence threshold.
 - Compare baseline vs updated batch summaries:
   - `uv run python -m src.compare_batches --baseline <baseline_summary.json> --updated <updated_summary.json>`
 
 When a new entry matches an existing paper (by DOI, PMID, or normalized title), records are harmonized using an AI merge agent with deterministic fallback rules.
-- Each canonical paper row represents one paper source (`source_count=1`); consolidated ingestion history is tracked in `paper_versions` and shown as `version_count` in the UI.
+- Each canonical paper row represents one paper source (`source_count=1`); consolidated ingestion history is tracked in `paper_versions` (not shown in the main table).
 - If journal is missing, the DB stores a source venue fallback (e.g., arXiv/bioRxiv/domain/DOI).
+
+## Taxonomy and Organism Formatting
+- Metadata now uses a fixed category/subcategory taxonomy:
+  - `biology`, `computational`, `environmental`, `clinical`, `general_science`
+- Methods organism formatting is normalized to:
+  - `Latin name [common: common name]`
+- Very high-species-count studies are compacted with:
+  - `MULTI_SPECIES(total=<n>)`
 
 ## Confidence Metric
 - `extraction_confidence` is computed deterministically from:

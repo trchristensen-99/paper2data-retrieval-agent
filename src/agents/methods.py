@@ -5,6 +5,7 @@ from agents import Agent, AgentOutputSchema, Runner
 from src.schemas.models import MethodsSummary
 from src.utils.config import MODELS
 from src.utils.logging import log_event
+from src.utils.organisms import normalize_organism_entries
 from src.utils.retry import run_with_rate_limit_retry
 
 METHODS_PROMPT = """Extract methods details needed for statistical assessment:
@@ -15,6 +16,11 @@ METHODS_PROMPT = """Extract methods details needed for statistical assessment:
 - methods completeness assessment for reproducibility
 
 Do not speculate. Mark missing details explicitly in summary text.
+
+Organism formatting requirement:
+- Use "Latin name [common: common name]" whenever possible.
+- For very broad surveys with many species, return representative named species plus one marker:
+  "MULTI_SPECIES(total=<n>)".
 """
 
 methods_agent = Agent(
@@ -39,5 +45,6 @@ async def run_methods_agent(paper_markdown: str, guidance: str | None = None) ->
     output = result.final_output
     if not isinstance(output, MethodsSummary):
         output = MethodsSummary.model_validate(output)
+    output.organisms = normalize_organism_entries(output.organisms)
     log_event("agent.methods.end", output.model_dump())
     return output

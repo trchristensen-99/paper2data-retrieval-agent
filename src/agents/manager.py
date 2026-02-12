@@ -23,6 +23,7 @@ from src.schemas.models import PaperRecord, SynthesisInput, SynthesisOutput
 from src.utils.config import MODELS
 from src.utils.confidence import compute_extraction_confidence
 from src.utils.logging import log_event, reset_events
+from src.utils.taxonomy import normalize_category_subcategory
 
 
 manager_agent = Agent(
@@ -67,6 +68,9 @@ async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
 
     step_start = perf_counter()
     metadata = await run_metadata_agent(paper_markdown)
+    metadata.category, metadata.subcategory = normalize_category_subcategory(
+        metadata.category, metadata.subcategory
+    )
     step_timings_seconds["metadata"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "metadata", "seconds": step_timings_seconds["metadata"]})
     _print_step_timing("metadata", step_timings_seconds["metadata"])
@@ -118,6 +122,9 @@ async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
             reason = instruction.reason
             if agent_name == "metadata":
                 metadata = await run_metadata_agent(paper_markdown, guidance=reason)
+                metadata.category, metadata.subcategory = normalize_category_subcategory(
+                    metadata.category, metadata.subcategory
+                )
             elif agent_name == "methods":
                 methods = await run_methods_agent(paper_markdown, guidance=reason)
             elif agent_name == "results":
@@ -127,7 +134,13 @@ async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
             log_event("pipeline.quality_retry.step", {"agent": agent_name, "reason": reason})
         log_event("pipeline.quality_retry.end", {"notes": quality_check.notes})
 
-    if not metadata.doi or not metadata.pmid:
+    needs_enrichment = (
+        (not metadata.doi)
+        or (not metadata.pmid)
+        or (not metadata.journal)
+        or (metadata.journal.strip().lower() == "scientific data")
+    )
+    if needs_enrichment:
         step_start = perf_counter()
         enrichment = await run_metadata_enrichment_agent(metadata, paper_markdown)
         step_timings_seconds["metadata_enrichment"] = perf_counter() - step_start
@@ -141,7 +154,15 @@ async def run_pipeline(paper_markdown: str) -> PipelineArtifacts:
             metadata.doi = enrichment.doi
         if not metadata.pmid and enrichment.pmid:
             metadata.pmid = enrichment.pmid
-        if not metadata.journal and enrichment.journal:
+        if enrichment.journal and (
+            (not metadata.journal)
+            or (metadata.journal.strip().lower() == "scientific data")
+            or (
+                metadata.doi
+                and enrichment.doi
+                and metadata.doi.strip().lower() == enrichment.doi.strip().lower()
+            )
+        ):
             metadata.journal = enrichment.journal
         if not metadata.publication_date and enrichment.publication_date:
             metadata.publication_date = enrichment.publication_date
