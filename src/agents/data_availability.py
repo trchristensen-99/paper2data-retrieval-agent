@@ -97,6 +97,8 @@ def _norm_url_ocr(url: str | None) -> str | None:
     fixed = url.strip()
     fixed = re.sub(r"https?://(?:www\.)?fgshare\.com", "https://figshare.com", fixed, flags=re.IGNORECASE)
     fixed = re.sub(r"\b10\.6084/m9\.fgshare\.", "10.6084/m9.figshare.", fixed, flags=re.IGNORECASE)
+    fixed = re.sub(r"([?&])fle=([0-9]+)", r"\1file=\2", fixed, flags=re.IGNORECASE)
+    fixed = re.sub(r"([?&])file=([0-9]{8})[0-9]+", r"\1file=\2", fixed, flags=re.IGNORECASE)
     return fixed
 
 
@@ -550,6 +552,13 @@ async def run_data_availability_agent(
         output.data_availability.discrepancies.append(
             f"Filtered {dropped} external reference links from data_accessions."
         )
+    discrepancy_text = " ".join(output.data_availability.discrepancies).lower()
+    unresolved_markers = ("could not", "failed", "dns", "unverified", "timeout", "error")
+    if any(marker in discrepancy_text for marker in unresolved_markers):
+        if output.data_availability.overall_status == "accessible":
+            output.data_availability.overall_status = "partially_accessible"
+        if output.data_availability.check_status == "ok":
+            output.data_availability.check_status = "partial"
     log_event(
         "agent.data_availability.end",
         {

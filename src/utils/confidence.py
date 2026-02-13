@@ -53,14 +53,25 @@ class ConfidenceBreakdown:
     results: float
     data_access: float
     penalties: float
+    metadata_quality: float
+    methods_quality: float
+    results_quality: float
+    data_quality: float
+    qc_quality: float
+    metadata_weight: float
+    methods_weight: float
+    results_weight: float
+    data_weight: float
+    qc_weight: float
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "score": self.score,
-            "metadata": self.metadata,
-            "methods": self.methods,
-            "results": self.results,
-            "data_access": self.data_access,
+            "metadata": {"weighted": self.metadata, "quality": self.metadata_quality, "weight": self.metadata_weight},
+            "methods": {"weighted": self.methods, "quality": self.methods_quality, "weight": self.methods_weight},
+            "results": {"weighted": self.results, "quality": self.results_quality, "weight": self.results_weight},
+            "data_access": {"weighted": self.data_access, "quality": self.data_quality, "weight": self.data_weight},
+            "qc": {"quality": self.qc_quality, "weight": self.qc_weight},
             "penalties": self.penalties,
         }
 
@@ -86,7 +97,10 @@ def compute_extraction_confidence(
         bool((metadata.paper_type or "").strip()),
     ]
     metadata_quality = sum(1.0 for ok in metadata_checks if ok) / len(metadata_checks)
-    metadata_component = metadata_quality * 0.26
+    metadata_weight = 0.26
+    data_weight = 0.14
+    qc_weight = 0.08
+    metadata_component = metadata_quality * metadata_weight
 
     methods_checks = [
         bool(methods.experimental_design.strip()),
@@ -167,13 +181,13 @@ def compute_extraction_confidence(
     elif check_status == "partial":
         discrepancy_penalty += 0.15
     data_quality = _clamp(status_quality + verified_bonus - discrepancy_penalty)
-    data_access_component = data_quality * 0.14
+    data_access_component = data_quality * data_weight
 
     missing_penalty = min(len(quality_check.missing_fields), 10) * 0.05
     suspicious_penalty = min(len(quality_check.suspicious_empty_fields), 10) * 0.03
     retry_penalty = 0.10 if quality_check.should_retry else 0.0
     qc_quality = _clamp(1.0 - missing_penalty - suspicious_penalty - retry_penalty)
-    qc_component = qc_quality * 0.08
+    qc_component = qc_quality * qc_weight
     overclaim_penalty = _overinterpretation_penalty(results, paper_type)
 
     raw = metadata_component + methods_component + results_component + data_access_component + qc_component - overclaim_penalty
@@ -187,4 +201,14 @@ def compute_extraction_confidence(
         results=results_component,
         data_access=data_access_component,
         penalties=_clamp(penalties + retry_penalty + overclaim_penalty),
+        metadata_quality=metadata_quality,
+        methods_quality=methods_quality,
+        results_quality=results_quality,
+        data_quality=data_quality,
+        qc_quality=qc_quality,
+        metadata_weight=metadata_weight,
+        methods_weight=methods_weight,
+        results_weight=results_weight,
+        data_weight=data_weight,
+        qc_weight=qc_weight,
     )

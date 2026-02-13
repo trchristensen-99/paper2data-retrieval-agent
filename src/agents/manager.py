@@ -215,6 +215,8 @@ def _norm_url_ocr(url: str | None) -> str | None:
     fixed = url.strip()
     fixed = re.sub(r"https?://(?:www\.)?fgshare\.com", "https://figshare.com", fixed, flags=re.IGNORECASE)
     fixed = re.sub(r"\b10\.6084/m9\.fgshare\.", "10.6084/m9.figshare.", fixed, flags=re.IGNORECASE)
+    fixed = re.sub(r"([?&])fle=([0-9]+)", r"\1file=\2", fixed, flags=re.IGNORECASE)
+    fixed = re.sub(r"([?&])file=([0-9]{8})[0-9]+", r"\1file=\2", fixed, flags=re.IGNORECASE)
     return fixed
 
 
@@ -239,26 +241,104 @@ def _extract_first_int(pattern: str, text: str, flags: int = re.IGNORECASE) -> i
 
 def _extract_prisma_flow(text: str, existing: dict[str, int] | None = None) -> dict[str, int]:
     flow: dict[str, int] = dict(existing or {})
+    alias_map = {
+        "records_identified": "database_records_total",
+        "records_screened": "screened",
+        "full_text_reviews": "full_text_review",
+        "studies_included": "included",
+    }
+    for old_key, new_key in alias_map.items():
+        if old_key in flow and new_key not in flow:
+            value = flow.get(old_key)
+            if isinstance(value, int):
+                flow[new_key] = value
     patterns = {
         "acm_records": r"\b([0-9][0-9,]*)\s+(?:records?\s+)?from\s+acm(?:\s+digital\s+library|\s+dl)?\b",
         "ieee_records": r"\b([0-9][0-9,]*)\s+(?:records?\s+)?from\s+ieee\b",
         "citation_review_records": r"\b([0-9][0-9,]*)\s+(?:from\s+)?citation(?:\s+review)?\b",
         "expert_records": r"\b([0-9][0-9,]*)\s+(?:from\s+)?expert(?:\s+consultation)?\b",
         "duplicates_removed": r"\b([0-9][0-9,]*)\s+duplicates?\s+removed\b",
-        "screened": r"\b([0-9][0-9,]*)\s+(?:records?\s+)?screened\b",
-        "excluded_title_abstract": r"\b([0-9][0-9,]*)\s+excluded(?:\s+at\s+title/abstract)?\b",
-        "full_text_review": r"\b([0-9][0-9,]*)\s+full[\-\s]?text(?:\s+review)?\b",
-        "excluded_full_text": r"\b([0-9][0-9,]*)\s+excluded(?:\s+at\s+full[\-\s]?text)?\b",
-        "included": r"\b([0-9][0-9,]*)\s+(?:papers?|studies|records?)\s+included\b",
+        "screened": r"\b([0-9][0-9,]*)\s+(?:records?\s+)?(?:were\s+)?screened\b",
+        "excluded_title_abstract": r"\b([0-9][0-9,]*)\s+(?:were\s+)?excluded\s+(?:at|during)\s+title(?:\s*(?:and|&|/)\s*abstract)?\b",
+        "full_text_review": r"\b([0-9][0-9,]*)\s+(?:full[\-\s]?text(?:\s+articles?)?)\s+(?:were\s+)?(?:assessed|reviewed)\b",
+        "excluded_full_text": r"\b([0-9][0-9,]*)\s+(?:were\s+)?excluded\s+(?:at|during)\s+full[\-\s]?text\b",
+        "included": r"\b([0-9][0-9,]*)\s+(?:papers?|studies|articles?|records?)\s+(?:were\s+)?included\b",
     }
     lowered = text.lower()
     for key, pattern in patterns.items():
-        if key in flow:
-            continue
         value = _extract_first_int(pattern, lowered)
         if value is not None:
             flow[key] = value
+    if "citation_review_records" not in flow:
+        cite_alt = _extract_first_int(r"citation[^\n]{0,80}\b([0-9][0-9,]*)\b", lowered)
+        if cite_alt is not None:
+            flow["citation_review_records"] = cite_alt
+    if "expert_records" not in flow:
+        expert_alt = _extract_first_int(r"expert[^\n]{0,80}\b([0-9][0-9,]*)\b", lowered)
+        if expert_alt is not None:
+            flow["expert_records"] = expert_alt
+    title_abs_alt = _extract_first_int(r"title(?:\s*(?:and|&|/)\s*abstract)[^\n]{0,120}?\(n\s*=\s*([0-9][0-9,]*)\)", lowered)
+    if title_abs_alt is not None:
+        flow["excluded_title_abstract"] = title_abs_alt
+    full_text_alt = _extract_first_int(r"full[\-\s]?text[^\n]{0,120}?\(n\s*=\s*([0-9][0-9,]*)\)[^\n]{0,80}excluded", lowered)
+    if full_text_alt is not None:
+        flow["excluded_full_text"] = full_text_alt
+    if "database_records_total" not in flow and ("acm_records" in flow or "ieee_records" in flow):
+        flow["database_records_total"] = int(flow.get("acm_records", 0)) + int(flow.get("ieee_records", 0))
+    if "records_identified_total" not in flow or int(flow.get("records_identified_total", 0) or 0) <= 0:
+        flow["records_identified_total"] = (
+            int(flow.get("database_records_total", 0))
+            + int(flow.get("citation_review_records", 0))
+            + int(flow.get("expert_records", 0))
+        )
+    if "records_after_duplicate_removal" not in flow and "screened" in flow:
+        flow["records_after_duplicate_removal"] = int(flow["screened"])
+    if "excluded_title_abstract" not in flow and "screened" in flow and "full_text_review" in flow:
+        diff = int(flow["screened"]) - int(flow["full_text_review"])
+        if diff > 0:
+            flow["excluded_title_abstract"] = diff
+    if "excluded_full_text" not in flow and "full_text_review" in flow and "included" in flow:
+        diff = int(flow["full_text_review"]) - int(flow["included"])
+        if diff > 0:
+            flow["excluded_full_text"] = diff
+    for key in ("excluded_title_abstract", "excluded_full_text", "screened", "full_text_review", "included", "database_records_total"):
+        if int(flow.get(key, 0) or 0) < 50 and key in {"excluded_title_abstract", "excluded_full_text", "screened", "full_text_review", "included", "database_records_total"}:
+            flow.pop(key, None)
     return flow
+
+
+def _extract_figshare_file_url(paper_markdown: str) -> str | None:
+    doi_match = re.search(r"\b10\.6084/m9\.(?:figshare|fgshare)\.([0-9]+)\b", paper_markdown, flags=re.IGNORECASE)
+    article_id = doi_match.group(1) if doi_match else None
+    file_id = _extract_first_int(r"\bfile\s*=\s*([0-9]{5,})\b", paper_markdown, flags=re.IGNORECASE)
+    if article_id and file_id:
+        return f"https://figshare.com/articles/dataset/{article_id}?file={file_id}"
+
+    match = re.search(
+        r"https?://(?:www\.)?(?:figshare|fgshare)\.com/[^\s)\]]+",
+        paper_markdown,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        doi_match = re.search(r"\b10\.6084/m9\.(?:figshare|fgshare)\.[0-9]+\b", paper_markdown, flags=re.IGNORECASE)
+        if doi_match:
+            return f"https://doi.org/{_norm_url_ocr(doi_match.group(0))}"
+        return None
+    url = _norm_url_ocr(match.group(0).strip().rstrip(".,;"))
+    if not url:
+        return None
+    file_id = _extract_first_int(r"\bfile\s*=\s*([0-9]{5,})\b", paper_markdown, flags=re.IGNORECASE)
+    if file_id:
+        base = re.sub(r"[?&]file=[0-9]+", "", url, flags=re.IGNORECASE)
+        sep = "&" if "?" in base else "?"
+        url = f"{base}{sep}file={file_id}"
+    normed = _norm_url_ocr(url)
+    has_numeric_article_id = bool(normed and re.search(r"/[0-9]{6,}(?:[/?]|$)", normed))
+    if normed and (len(normed) < 35 or not has_numeric_article_id or normed.lower().endswith("/_b_")):
+        doi_match = re.search(r"\b10\.6084/m9\.(?:figshare|fgshare)\.[0-9]+\b", paper_markdown, flags=re.IGNORECASE)
+        if doi_match:
+            return f"https://doi.org/{_norm_url_ocr(doi_match.group(0))}"
+    return normed
 
 
 def _extract_table_blocks(text: str) -> list[ExtractedTable]:
@@ -283,16 +363,52 @@ def _extract_table_blocks(text: str) -> list[ExtractedTable]:
         seen: set[str] = set()
         for row in parsed_rows[1:]:
             for cell in row:
-                token = cell.strip()
-                if len(token) < 2:
-                    continue
-                low = token.lower()
-                if low in seen:
-                    continue
-                seen.add(low)
-                key_content.append(token)
-                if len(key_content) >= 40:
-                    break
+                parts = re.split(r"[•▪◦●;]\s*|\s+-\s+", cell.strip())
+                if len(parts) == 1:
+                    parts = [cell.strip()]
+                for part in parts:
+                    token = re.sub(r"\s+", " ", part).strip(" -\t\r\n")
+                    token = token.replace(".The ", ". The ")
+                    sentence_parts = [s.strip() for s in re.split(r"\.\s+", token) if s.strip()]
+                    if len(sentence_parts) > 1:
+                        for sent in sentence_parts:
+                            if len(sent) < 2:
+                                continue
+                            low_sent = sent.lower()
+                            if low_sent in seen:
+                                continue
+                            seen.add(low_sent)
+                            key_content.append(sent)
+                            if len(key_content) >= 40:
+                                break
+                        if len(key_content) >= 40:
+                            break
+                        continue
+                    if len(token) < 2:
+                        continue
+                    if "inclusion criteria" in token.lower() and "exclusion criteria" in token.lower():
+                        subparts = re.split(r"(?i)\b(inclusion criteria|exclusion criteria)\b", token)
+                        for sub in subparts:
+                            sub_clean = re.sub(r"\s+", " ", sub).strip(" -:\t\r\n")
+                            if len(sub_clean) < 3:
+                                continue
+                            low_sub = sub_clean.lower()
+                            if low_sub in seen:
+                                continue
+                            seen.add(low_sub)
+                            key_content.append(sub_clean)
+                            if len(key_content) >= 40:
+                                break
+                        if len(key_content) >= 40:
+                            break
+                        continue
+                    low = token.lower()
+                    if low in seen:
+                        continue
+                    seen.add(low)
+                    key_content.append(token)
+                    if len(key_content) >= 40:
+                        break
             if len(key_content) >= 40:
                 break
         extracted.append(
@@ -331,6 +447,9 @@ def _extract_dataset_profile_from_text(
     measures_count = _extract_first_int(r"\b([0-9][0-9,]*)\s+measures\b", lowered)
     if measures_count is not None and (profile.record_count is None or profile.record_count < measures_count):
         profile.record_count = measures_count
+    dims_measures = profile.dimensions.get("measures") if isinstance(profile.dimensions, dict) else None
+    if isinstance(dims_measures, int) and (profile.record_count is None or profile.record_count < dims_measures):
+        profile.record_count = dims_measures
     if profile.data_point_count is None:
         profile.data_point_count = _extract_first_int(
             r"\b([0-9][0-9,]*)\s+data\s+points?\b",
@@ -349,6 +468,8 @@ def _extract_dataset_profile_from_text(
             r"\b([0-9][0-9,]*)\s+(?:papers?|articles?)\s+(?:in(?:\s+the)?\s+)?(?:final\s+corpus|included)\b",
             lowered,
         )
+    if profile.source_corpus_size and profile.record_count and profile.record_count == profile.source_corpus_size and measures_count:
+        profile.record_count = measures_count
 
     if not profile.version:
         version_match = re.search(r"\bversion\s+([0-9]+(?:\.[0-9]+)?)\b", lowered)
@@ -390,10 +511,36 @@ def _extract_dataset_profile_from_text(
             token = re.sub(r"[),.;]+$", "", match.strip())
             if token and token not in contents:
                 contents.append(token)
+    if any(x.lower() == "sunburst_visualization_link.md" for x in contents):
+        contents = [x for x in contents if x.lower() != "link.md"]
+    contents = [x for x in contents if x.lower() != "link.md"]
     profile.repository_contents = contents[:80]
 
     prisma_flow = _extract_prisma_flow(text, existing=profile.prisma_flow or anatomy_prisma_flow)
     profile.prisma_flow = prisma_flow
+    included_from_prisma = prisma_flow.get("included")
+    if isinstance(included_from_prisma, int) and included_from_prisma > 0:
+        if profile.source_corpus_size is None or profile.source_corpus_size > included_from_prisma:
+            profile.source_corpus_size = included_from_prisma
+
+    if not isinstance(profile.dimensions, dict):
+        profile.dimensions = {}
+    assessment_terms = {
+        "statistical": "statistical",
+        "mathematical": "mathematical",
+        "behavioural": "behavioural",
+        "behavioral": "behavioural",
+        "self-reported": "self-reported",
+        "qualitative": "qualitative_or_other",
+        "unspecified": "qualitative_or_other",
+        "other": "qualitative_or_other",
+    }
+    found_assessments: set[str] = set()
+    for token, label in assessment_terms.items():
+        if re.search(rf"\b{re.escape(token)}\b", lowered):
+            found_assessments.add(label)
+    if found_assessments:
+        profile.dimensions["assessments"] = max(int(profile.dimensions.get("assessments", 0) or 0), len(found_assessments))
 
     if not profile.processing_pipeline_summary:
         summary_match = re.search(
@@ -539,6 +686,93 @@ def _derive_code_repositories(
     return out
 
 
+def _clean_placeholder_list(values: list[str], *, drop_journal: str | None = None) -> list[str]:
+    blocked = {
+        "n/a",
+        "na",
+        "none",
+        "null",
+        "unknown",
+        "unspecified",
+        "multi_species(total=0)",
+    }
+    if drop_journal:
+        blocked.add(drop_journal.strip().lower())
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in values:
+        token = re.sub(r"\s+", " ", str(v or "").strip())
+        if not token:
+            continue
+        low = token.lower()
+        if low in blocked:
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        out.append(token)
+    return out
+
+
+def _derive_keywords_from_text(paper_markdown: str, metadata_title: str) -> list[str]:
+    text = f"{metadata_title}\n{paper_markdown}".lower()
+    vocab = [
+        "responsible ai",
+        "ethical principles",
+        "scoping review",
+        "measurement",
+        "fairness",
+        "transparency",
+        "privacy",
+        "trust",
+        "ai governance",
+        "sociotechnical harms",
+        "dataset",
+    ]
+    out: list[str] = []
+    for term in vocab:
+        if term in text:
+            out.append(term)
+    return out[:10]
+
+
+def _keywords_need_repair(values: list[str]) -> bool:
+    generic = {"interdisciplinary", "data_resource", "biology", "general_science", "dataset"}
+    if len(values) < 3:
+        return True
+    low = {v.strip().lower() for v in values if v.strip()}
+    return low.issubset(generic)
+
+
+def _prune_related_resources(
+    resources: list[RelatedResource],
+    *,
+    code_repositories: list[str],
+    data_accession_urls: list[str],
+    paper_doi: str | None,
+) -> list[RelatedResource]:
+    code_keys = {c.strip().lower() for c in code_repositories}
+    data_keys = {u.strip().lower() for u in data_accession_urls if u and u.strip()}
+    paper_doi_key = (paper_doi or "").strip().lower()
+    out: list[RelatedResource] = []
+    for r in resources:
+        u = (r.url or "").strip().lower()
+        n = (r.name or "").strip().lower()
+        is_code_like = r.type == "tool" and (".py" in u or ".ipynb" in u or "github" in u or "gitlab" in u or "figshare" in u)
+        if u and u in code_keys:
+            continue
+        if u and u in data_keys:
+            continue
+        if paper_doi_key and (paper_doi_key in u):
+            continue
+        if n.startswith("bundled_file:") and any(n == ck for ck in code_keys):
+            continue
+        if is_code_like:
+            continue
+        out.append(r)
+    return out
+
+
 @dataclass
 class PipelineArtifacts:
     record: PaperRecord
@@ -664,9 +898,12 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     )
     if results.dataset_profile and results.dataset_profile.repository_contents:
         profile_contents = results.dataset_profile.repository_contents
+        figshare_file_url = _extract_figshare_file_url(paper_markdown)
         for accession in data_availability.data_accessions:
             repo = (accession.repository or "").lower()
             if "figshare" in repo:
+                if figshare_file_url:
+                    accession.url = figshare_file_url
                 files = list(accession.files_listed or [])
                 seen = {f.lower() for f in files}
                 for item in profile_contents:
@@ -675,6 +912,9 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
                         continue
                     files.append(item.strip())
                     seen.add(key)
+                if any(x.lower() == "sunburst_visualization_link.md" for x in files):
+                    files = [x for x in files if x.lower() != "link.md"]
+                files = [x for x in files if x.lower() != "link.md"]
                 accession.files_listed = files[:120]
                 accession.file_count = max(accession.file_count or 0, len(accession.files_listed))
 
@@ -820,6 +1060,10 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         precise_date = _extract_publication_date(paper_markdown)
         if precise_date:
             metadata.publication_date = precise_date
+    metadata.keywords = _clean_placeholder_list(metadata.keywords, drop_journal=metadata.journal)
+    methods.organisms = _clean_placeholder_list(methods.organisms)
+    methods.cell_types = _clean_placeholder_list(methods.cell_types)
+    methods.assay_types = _clean_placeholder_list(methods.assay_types)
     if not metadata.keywords:
         metadata.keywords = _derive_keywords(
             metadata.keywords,
@@ -828,7 +1072,15 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
             methods.assay_types,
             methods.organisms,
             metadata.journal,
-        ) or ["unspecified"]
+        )
+    if _keywords_need_repair(metadata.keywords):
+        metadata.keywords = _derive_keywords_from_text(paper_markdown, metadata.title)
+    metadata.keywords = _clean_placeholder_list(metadata.keywords, drop_journal=metadata.journal)
+    if not metadata.keywords:
+        metadata.keywords = _derive_keywords_from_text(paper_markdown, metadata.title)
+    metadata.keywords = _clean_placeholder_list(metadata.keywords, drop_journal=metadata.journal)
+    if not metadata.keywords:
+        metadata.keywords = ["dataset"]
     if _is_blank(metadata.paper_type):
         metadata.paper_type = _infer_paper_type(metadata.title, paper_markdown)
     if _is_blank(results.paper_type):
@@ -840,6 +1092,12 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         related_resources=getattr(data_availability, "related_resources", []),
         dataset_profile=results.dataset_profile,
     )
+    cleaned_related_resources = _prune_related_resources(
+        list(getattr(data_availability, "related_resources", [])),
+        code_repositories=code_repositories,
+        data_accession_urls=[a.url or "" for a in data_availability.data_accessions],
+        paper_doi=metadata.doi,
+    )
 
     synthesis_input = SynthesisInput(
         metadata=metadata,
@@ -848,7 +1106,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         data_accessions=data_availability.data_accessions,
         data_availability=data_availability.data_availability,
         code_repositories=code_repositories,
-        related_resources=getattr(data_availability, "related_resources", []),
+        related_resources=cleaned_related_resources,
     )
 
     step_start = perf_counter()
@@ -860,6 +1118,16 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     step_timings_seconds["synthesis"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "synthesis", "seconds": step_timings_seconds["synthesis"]})
     _print_step_timing("synthesis", step_timings_seconds["synthesis"])
+
+    # Keep synthesis for narrative artifacts, but enforce canonical structured fields
+    # from deterministic pipeline outputs to avoid model drift in final JSON.
+    synthesis.record.metadata = metadata
+    synthesis.record.methods = methods
+    synthesis.record.results = results
+    synthesis.record.data_accessions = data_availability.data_accessions
+    synthesis.record.data_availability = data_availability.data_availability
+    synthesis.record.code_repositories = code_repositories
+    synthesis.record.related_resources = cleaned_related_resources
 
     confidence = compute_extraction_confidence(
         metadata=metadata,
