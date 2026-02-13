@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from time import perf_counter
 
 from agents import Agent
@@ -29,6 +31,7 @@ from src.schemas.models import (
     DatasetProfile,
     DescriptiveStat,
     ExtractedTable,
+    PrismaFlow,
     PaperRecord,
     RelatedResource,
     SynthesisInput,
@@ -120,6 +123,32 @@ def _extract_publication_date(text: str) -> str | None:
     return None
 
 
+def _normalize_publication_status(publication_date: str | None) -> str | None:
+    if not publication_date:
+        return None
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", publication_date.strip()):
+        return None
+    try:
+        dt = datetime.strptime(publication_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except Exception:  # noqa: BLE001
+        return None
+    now = datetime.now(timezone.utc)
+    if dt > now:
+        return "advance_access"
+    return "confirmed"
+
+
+def _normalize_license_to_spdx(value: str | None) -> str | None:
+    if not value:
+        return value
+    text = re.sub(r"\s+", " ", value.strip().lower())
+    if "creative commons attribution" in text or "cc by 4.0" in text or "cc-by-4.0" in text:
+        return "CC-BY-4.0"
+    if "cc0" in text or "public domain dedication" in text:
+        return "CC0-1.0"
+    return value.strip()
+
+
 def _normalize_venue_name(journal: str | None) -> str | None:
     if journal is None:
         return None
@@ -157,6 +186,15 @@ def _derive_keywords(
         seen.add(key)
         out.append(token)
     return out[:8]
+
+
+def _clean_input_text(raw: str) -> str:
+    cleaned = html.unescape(raw)
+    cleaned = cleaned.replace("\r\n", "\n")
+    cleaned = cleaned.replace("\u00a0", " ")
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned
 
 
 def _infer_paper_type(metadata_title: str, paper_markdown: str) -> str:
@@ -305,6 +343,23 @@ def _extract_prisma_flow(text: str, existing: dict[str, int] | None = None) -> d
         if int(flow.get(key, 0) or 0) < 50 and key in {"excluded_title_abstract", "excluded_full_text", "screened", "full_text_review", "included", "database_records_total"}:
             flow.pop(key, None)
     return flow
+
+
+def _prisma_model(flow: dict[str, int] | PrismaFlow | None) -> PrismaFlow:
+    if isinstance(flow, PrismaFlow):
+        model = flow
+    elif isinstance(flow, dict):
+        model = PrismaFlow.model_validate(flow)
+    else:
+        model = PrismaFlow()
+    data = model.as_compact_dict()
+    if data.get("records_identified_total") is None:
+        total = int(data.get("database_records_total", 0)) + int(data.get("citation_review_records", 0)) + int(data.get("expert_records", 0))
+        if total > 0:
+            data["records_identified_total"] = total
+    if data.get("records_after_duplicate_removal") is None and data.get("screened") is not None:
+        data["records_after_duplicate_removal"] = int(data["screened"])
+    return PrismaFlow.model_validate(data)
 
 
 def _extract_figshare_file_url(paper_markdown: str) -> str | None:
@@ -516,9 +571,11 @@ def _extract_dataset_profile_from_text(
     contents = [x for x in contents if x.lower() != "link.md"]
     profile.repository_contents = contents[:80]
 
-    prisma_flow = _extract_prisma_flow(text, existing=profile.prisma_flow or anatomy_prisma_flow)
-    profile.prisma_flow = prisma_flow
-    included_from_prisma = prisma_flow.get("included")
+    existing_flow = profile.prisma_flow.as_compact_dict() if isinstance(profile.prisma_flow, PrismaFlow) else (profile.prisma_flow or {})
+    prisma_flow_raw = _extract_prisma_flow(text, existing=existing_flow or anatomy_prisma_flow)
+    profile.prisma_flow = _prisma_model(prisma_flow_raw)
+    compact_flow = profile.prisma_flow.as_compact_dict()
+    included_from_prisma = compact_flow.get("included")
     if isinstance(included_from_prisma, int) and included_from_prisma > 0:
         if profile.source_corpus_size is None or profile.source_corpus_size > included_from_prisma:
             profile.source_corpus_size = included_from_prisma
@@ -541,6 +598,23 @@ def _extract_dataset_profile_from_text(
             found_assessments.add(label)
     if found_assessments:
         profile.dimensions["assessments"] = max(int(profile.dimensions.get("assessments", 0) or 0), len(found_assessments))
+
+    physical_keys = {"rows", "columns", "files", "bytes", "record_count", "data_point_count"}
+    physical = dict(profile.physical_dimensions or {})
+    conceptual = dict(profile.conceptual_dimensions or {})
+    for key, value in (profile.dimensions or {}).items():
+        if key in physical_keys:
+            physical[key] = value
+        else:
+            conceptual[key] = value
+    if profile.record_count is not None:
+        physical["record_count"] = profile.record_count
+    if profile.data_point_count is not None:
+        physical["data_point_count"] = profile.data_point_count
+    if profile.columns is not None:
+        physical["columns"] = profile.columns
+    profile.physical_dimensions = physical
+    profile.conceptual_dimensions = conceptual
 
     if not profile.processing_pipeline_summary:
         summary_match = re.search(
@@ -622,11 +696,12 @@ def _backfill_dataset_results(
             props.append(DescriptiveStat(property="temporal_coverage", value=p.temporal_coverage, context="Time span covered"))
         if p.source_corpus_size is not None:
             props.append(DescriptiveStat(property="source_corpus_size", value=str(p.source_corpus_size), context="Source papers included"))
-        if p.prisma_flow:
+        p_flow = p.prisma_flow.as_compact_dict() if isinstance(p.prisma_flow, PrismaFlow) else (p.prisma_flow or {})
+        if p_flow:
             props.append(
                 DescriptiveStat(
                     property="prisma_flow",
-                    value=", ".join([f"{k}:{v}" for k, v in sorted(p.prisma_flow.items())]),
+                    value=", ".join([f"{k}:{v}" for k, v in sorted(p_flow.items())]),
                     context="Study selection flow counts",
                 )
             )
@@ -684,6 +759,20 @@ def _derive_code_repositories(
         seen.add(key)
         out.append(item.strip())
     return out
+
+
+def _split_code_repositories(code_repositories: list[str]) -> tuple[list[str], list[str]]:
+    vcs: list[str] = []
+    archival: list[str] = []
+    for item in code_repositories:
+        low = item.lower()
+        if any(token in low for token in ("github.com", "gitlab.com", "bitbucket.org", "svn")):
+            vcs.append(item)
+        elif any(token in low for token in ("figshare", "zenodo", "dataverse", "dryad", "osf", "bundled_file:")):
+            archival.append(item)
+        else:
+            archival.append(item)
+    return vcs, archival
 
 
 def _clean_placeholder_list(values: list[str], *, drop_journal: str | None = None) -> list[str]:
@@ -784,6 +873,7 @@ class PipelineArtifacts:
 
 
 async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> PipelineArtifacts:
+    paper_markdown = _clean_input_text(paper_markdown)
     pipeline_start = perf_counter()
     step_timings_seconds: dict[str, float] = {}
 
@@ -826,6 +916,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     if _is_blank(metadata.paper_type):
         metadata.paper_type = _infer_paper_type(metadata.title, paper_markdown)
     metadata.journal = _normalize_venue_name(metadata.journal)
+    metadata.license = _normalize_license_to_spdx(metadata.license)
     step_timings_seconds["metadata"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "metadata", "seconds": step_timings_seconds["metadata"]})
     _print_step_timing("metadata", step_timings_seconds["metadata"])
@@ -1012,6 +1103,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         if not metadata.publication_date and enrichment.publication_date:
             metadata.publication_date = enrichment.publication_date
         metadata.journal = _normalize_venue_name(metadata.journal)
+        metadata.license = _normalize_license_to_spdx(metadata.license)
         log_event("pipeline.metadata_enrichment.applied", {"notes": enrichment.notes})
 
     missing_before_repair = _missing_key_metadata_fields(
@@ -1083,6 +1175,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         metadata.keywords = ["dataset"]
     if _is_blank(metadata.paper_type):
         metadata.paper_type = _infer_paper_type(metadata.title, paper_markdown)
+    metadata.publication_status = _normalize_publication_status(metadata.publication_date) or metadata.publication_status
     if _is_blank(results.paper_type):
         results.paper_type = metadata.paper_type
 
@@ -1098,6 +1191,16 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         data_accession_urls=[a.url or "" for a in data_availability.data_accessions],
         paper_doi=metadata.doi,
     )
+    for resource in cleaned_related_resources:
+        if (resource.url or "").strip().lower() in {"https://render.com", "https://render.com/"}:
+            resource.url = None
+            desc = (resource.description or "").strip()
+            resource.description = (desc + " " if desc else "") + "Hosting provider identified, but deep visualization URL not resolved from source."
+            data_availability.data_availability.discrepancies.append(
+                "Visualization deep link unresolved: only hosting provider domain was found."
+            )
+            break
+    vcs_repositories, archival_repositories = _split_code_repositories(code_repositories)
 
     synthesis_input = SynthesisInput(
         metadata=metadata,
@@ -1105,7 +1208,10 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         results=results,
         data_accessions=data_availability.data_accessions,
         data_availability=data_availability.data_availability,
-        code_repositories=code_repositories,
+        code_repositories=vcs_repositories,
+        vcs_repositories=vcs_repositories,
+        archival_repositories=archival_repositories,
+        code_available=bool(vcs_repositories or archival_repositories),
         related_resources=cleaned_related_resources,
     )
 
@@ -1126,7 +1232,10 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     synthesis.record.results = results
     synthesis.record.data_accessions = data_availability.data_accessions
     synthesis.record.data_availability = data_availability.data_availability
-    synthesis.record.code_repositories = code_repositories
+    synthesis.record.code_repositories = vcs_repositories
+    synthesis.record.vcs_repositories = vcs_repositories
+    synthesis.record.archival_repositories = archival_repositories
+    synthesis.record.code_available = bool(vcs_repositories or archival_repositories)
     synthesis.record.related_resources = cleaned_related_resources
 
     confidence = compute_extraction_confidence(

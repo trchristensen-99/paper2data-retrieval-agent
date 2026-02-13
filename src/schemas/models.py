@@ -62,6 +62,41 @@ class DatasetColumn(BaseModel):
     description: Optional[str] = None
 
 
+class PrismaFlow(BaseModel):
+    database_records_total: Optional[int] = None
+    citation_review_records: Optional[int] = None
+    expert_records: Optional[int] = None
+    records_identified_total: Optional[int] = None
+    duplicates_removed: Optional[int] = None
+    records_after_duplicate_removal: Optional[int] = None
+    screened: Optional[int] = None
+    excluded_title_abstract: Optional[int] = None
+    full_text_review: Optional[int] = None
+    excluded_full_text: Optional[int] = None
+    included: Optional[int] = None
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _coerce_int(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return value
+        try:
+            text = str(value).strip()
+            digits = "".join(ch for ch in text if ch.isdigit())
+            return int(digits) if digits else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def as_compact_dict(self) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for key, value in self.model_dump().items():
+            if isinstance(value, int):
+                out[key] = value
+        return out
+
+
 class DatasetProfile(BaseModel):
     name: Optional[str] = None
     format: list[str] = []
@@ -71,12 +106,34 @@ class DatasetProfile(BaseModel):
     temporal_coverage: Optional[str] = None
     source_corpus_size: Optional[int] = None
     dimensions: dict[str, Any] = {}
+    physical_dimensions: dict[str, Any] = {}
+    conceptual_dimensions: dict[str, Any] = {}
     version: Optional[str] = None
     license: Optional[str] = None
     repository_contents: list[str] = []
-    prisma_flow: dict[str, int] = {}
+    prisma_flow: PrismaFlow = Field(default_factory=PrismaFlow)
     processing_pipeline_summary: Optional[str] = None
     column_schema: list[DatasetColumn] = []
+
+    @field_validator("prisma_flow", mode="before")
+    @classmethod
+    def _normalize_prisma_flow(cls, value):
+        alias_map = {
+            "records_identified": "database_records_total",
+            "records_screened": "screened",
+            "full_text_reviews": "full_text_review",
+            "full_text_assessed": "full_text_review",
+            "studies_included": "included",
+        }
+        if isinstance(value, PrismaFlow):
+            return value
+        if not isinstance(value, dict):
+            return PrismaFlow()
+        normalized: dict[str, Any] = {}
+        for key, raw in value.items():
+            k = alias_map.get(str(key).strip(), str(key).strip())
+            normalized[k] = raw
+        return PrismaFlow.model_validate(normalized)
 
 
 class ExtractedTable(BaseModel):
@@ -84,6 +141,7 @@ class ExtractedTable(BaseModel):
     title: Optional[str] = None
     columns: list[str] = []
     summary: Optional[str] = None
+    key_content: list[str] = []
 
 
 class RelatedResource(BaseModel):
@@ -161,6 +219,7 @@ class MetadataRecord(BaseModel):
     pmid: Optional[str] = None
     journal: Optional[str] = None
     publication_date: Optional[str] = None
+    publication_status: Optional[str] = None
     keywords: list[str] = []
     funding_sources: list[str] = []
     conflicts_of_interest: Optional[str] = None
@@ -246,12 +305,23 @@ class PaperRecord(BaseModel):
     data_accessions: list[DataAccession]
     data_availability: DataAvailabilityReport
     code_repositories: list[str] = []
+    vcs_repositories: list[str] = []
+    archival_repositories: list[str] = []
+    code_available: Optional[bool] = None
     related_resources: list[RelatedResource] = []
     extraction_timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
     agent_version: str = "0.1.0"
     extraction_confidence: float = Field(ge=0.0, le=1.0)
+    extraction_confidence_breakdown: dict[str, Any] = {}
 
-    @field_validator("data_accessions", "code_repositories", "related_resources", mode="before")
+    @field_validator(
+        "data_accessions",
+        "code_repositories",
+        "vcs_repositories",
+        "archival_repositories",
+        "related_resources",
+        mode="before",
+    )
     @classmethod
     def _none_to_list(cls, value):
         return [] if value is None else value
@@ -263,6 +333,10 @@ class SynthesisInput(BaseModel):
     results: ResultsSummary
     data_accessions: list[DataAccession]
     data_availability: DataAvailabilityReport
+    code_repositories: list[str] = []
+    vcs_repositories: list[str] = []
+    archival_repositories: list[str] = []
+    code_available: Optional[bool] = None
     related_resources: list[RelatedResource] = []
 
 

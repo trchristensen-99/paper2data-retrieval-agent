@@ -288,4 +288,5 @@ async def test_dataset_descriptor_backfills_profile_and_code(monkeypatch: pytest
     assert artifacts.record.results.dataset_profile.record_count == 791
     assert artifacts.record.metadata.publication_date == "2025-12-20"
     assert any("figshare.com" in (a.url or "") for a in artifacts.record.data_accessions)
-    assert artifacts.record.code_repositories
+    assert artifacts.record.code_available is True
+    assert artifacts.record.archival_repositories

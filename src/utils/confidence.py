@@ -7,6 +7,7 @@ from src.schemas.models import (
     DataAvailabilityReport,
     MetadataRecord,
     MethodsSummary,
+    PrismaFlow,
     QualityCheckOutput,
     ResultsSummary,
 )
@@ -141,6 +142,31 @@ def compute_extraction_confidence(
             )
         license_bonus = 0.1 if (metadata.license or "").strip() else 0.0
         results_quality = _clamp(prop_quality + license_bonus)
+        profile = results.dataset_profile
+        if profile:
+            schema = list(profile.column_schema or [])
+            if schema:
+                nullish = 0
+                for col in schema:
+                    if not (col.category or "").strip() or not (col.description or "").strip():
+                        nullish += 1
+                null_ratio = nullish / max(len(schema), 1)
+                if null_ratio > 0:
+                    results_quality = _clamp(results_quality - min(0.35, 0.6 * null_ratio))
+            dirty_entity_hits = 0
+            for table in results.tables_extracted:
+                text = " ".join(table.key_content or [])
+                if "&#" in text:
+                    dirty_entity_hits += 1
+            if dirty_entity_hits > 0:
+                results_quality = _clamp(results_quality - min(0.25, 0.08 * dirty_entity_hits))
+            flow = profile.prisma_flow
+            compact = flow.as_compact_dict() if isinstance(flow, PrismaFlow) else {}
+            if compact:
+                required = ("database_records_total", "duplicates_removed", "screened", "full_text_review", "included")
+                missing = sum(1 for key in required if key not in compact)
+                if missing > 0:
+                    results_quality = _clamp(results_quality - min(0.25, 0.05 * missing))
         results_weight = 0.40
         methods_weight = 0.12
     elif paper_type in {"review", "meta_analysis"}:
