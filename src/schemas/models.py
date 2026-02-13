@@ -164,6 +164,13 @@ class Provenance(BaseModel):
     text_segment: Optional[str] = None
 
 
+class MethodTool(BaseModel):
+    name: str
+    version: Optional[str] = None
+    citation: Optional[str] = None
+    software_type: Optional[str] = None
+
+
 class AssayTypeMapping(BaseModel):
     raw: str
     mapped_term: str
@@ -174,13 +181,40 @@ class AssayTypeMapping(BaseModel):
 class ExperimentalDesignStep(BaseModel):
     step: int
     action: str
-    tools: list[str] = []
+    tools: list[MethodTool] = []
     criteria: Optional[str] = None
     count: Optional[int] = None
     excluded: Optional[int] = None
     included: Optional[int] = None
     context: Optional[str] = None
     provenance: Optional[Provenance] = None
+
+    @field_validator("tools", mode="before")
+    @classmethod
+    def _normalize_tools(cls, value):
+        if value is None:
+            return []
+        items = value if isinstance(value, list) else [value]
+        out: list[dict[str, str | None]] = []
+        for item in items:
+            if isinstance(item, dict):
+                name = str(item.get("name") or item.get("tool") or "").strip()
+                if not name:
+                    continue
+                out.append(
+                    {
+                        "name": name,
+                        "version": item.get("version"),
+                        "citation": item.get("citation"),
+                        "software_type": item.get("software_type"),
+                    }
+                )
+                continue
+            text = str(item).strip()
+            if not text:
+                continue
+            out.append({"name": text, "version": None, "citation": None, "software_type": None})
+        return out
 
 
 class RelatedResource(BaseModel):
@@ -197,6 +231,9 @@ class DataAccession(BaseModel):
         description="primary_dataset | supplementary_data | external_reference",
     )
     repository: str
+    system: Optional[str] = None
+    normalized_id: Optional[str] = None
+    repository_type: Optional[str] = None
     url: Optional[str] = None
     description: str
     data_format: Optional[str] = None

@@ -19,6 +19,8 @@ METHODS_PROMPT = """Extract methods details needed for statistical assessment:
 - statistical tests used
 - concise but faithful experimental design summary
 - experimental_design_steps as chronological atomic steps
+  For each step, provide `tools` as objects with:
+  name, version (if known), citation (if present), software_type.
 - methods completeness assessment for reproducibility
 
 Do not speculate. Mark missing details explicitly in summary text.
@@ -89,16 +91,72 @@ def _coerce_sample_sizes(value: Any) -> dict[str, Any]:
     return {"notes": str(value)}
 
 
+def _coerce_design_steps(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    items = value if isinstance(value, list) else [value]
+    out: list[dict[str, Any]] = []
+    for idx, item in enumerate(items, start=1):
+        if isinstance(item, dict):
+            if "step" not in item:
+                item = {"step": idx, **item}
+            if "action" not in item:
+                item["action"] = str(item.get("context") or f"Step {idx}")
+            out.append(item)
+            continue
+        text = str(item).strip()
+        if not text:
+            continue
+        out.append(
+            {
+                "step": idx,
+                "action": text[:120],
+                "context": text,
+            }
+        )
+    return out
+
+
+def _coerce_assay_type_mappings(value: Any, assay_types: list[str]) -> list[dict[str, Any]]:
+    if value is None:
+        return [{"raw": a, "mapped_term": a, "ontology_id": None, "vocabulary": None} for a in assay_types]
+    items = value if isinstance(value, list) else [value]
+    out: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict):
+            raw = str(item.get("raw") or item.get("assay") or item.get("name") or "").strip()
+            mapped = str(item.get("mapped_term") or raw or "").strip()
+            if not mapped:
+                continue
+            out.append(
+                {
+                    "raw": raw or mapped,
+                    "mapped_term": mapped,
+                    "ontology_id": item.get("ontology_id"),
+                    "vocabulary": item.get("vocabulary"),
+                }
+            )
+            continue
+        text = str(item).strip()
+        if not text:
+            continue
+        out.append({"raw": text, "mapped_term": text, "ontology_id": None, "vocabulary": None})
+    if not out:
+        out = [{"raw": a, "mapped_term": a, "ontology_id": None, "vocabulary": None} for a in assay_types]
+    return out
+
+
 def _sanitize_methods_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    assay_types = _coerce_list(payload.get("assay_types"))
     return {
         "organisms": _coerce_list(payload.get("organisms")),
         "cell_types": _coerce_list(payload.get("cell_types")),
-        "assay_types": _coerce_list(payload.get("assay_types")),
+        "assay_types": assay_types,
         "sample_sizes": _coerce_sample_sizes(payload.get("sample_sizes")),
         "statistical_tests": _coerce_list(payload.get("statistical_tests")),
         "experimental_design": _coerce_scalar(payload.get("experimental_design")),
-        "experimental_design_steps": payload.get("experimental_design_steps") or [],
-        "assay_type_mappings": payload.get("assay_type_mappings") or [],
+        "experimental_design_steps": _coerce_design_steps(payload.get("experimental_design_steps")),
+        "assay_type_mappings": _coerce_assay_type_mappings(payload.get("assay_type_mappings"), assay_types),
         "methods_completeness": _coerce_scalar(payload.get("methods_completeness")),
     }
 

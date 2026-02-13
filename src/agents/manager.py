@@ -36,6 +36,7 @@ from src.schemas.models import (
     ExperimentalDesignStep,
     ExtractedTable,
     ExperimentalFinding,
+    MethodTool,
     PrismaFlow,
     Provenance,
     PaperRecord,
@@ -289,9 +290,26 @@ def _locate_provenance(text: str, needle: str, *, source_table: str | None = Non
         return None
     token_low = token.lower()
     lines = text.splitlines()
+    lines_with_ends = text.splitlines(keepends=True)
+    page_markers = []
+    for idx, line in enumerate(lines, start=1):
+        m = re.search(r"\bpage\s+([0-9]{1,4})\b", line, flags=re.IGNORECASE)
+        if m:
+            page_markers.append((idx, int(m.group(1))))
     for idx, line in enumerate(lines, start=1):
         if token_low in line.lower():
+            source_page: int | None = None
+            if "\f" in text:
+                prefix = "".join(lines_with_ends[: idx - 1])
+                source_page = prefix.count("\f") + 1
+            if source_page is None and page_markers:
+                for marker_line, marker_page in page_markers:
+                    if marker_line <= idx:
+                        source_page = marker_page
+                    else:
+                        break
             return Provenance(
+                source_page=source_page,
                 source_section=None,
                 source_table=source_table,
                 line_start=idx,
@@ -299,6 +317,41 @@ def _locate_provenance(text: str, needle: str, *, source_table: str | None = Non
                 text_segment=line.strip()[:300],
             )
     return None
+
+
+def _normalize_accession_identifiers(accessions: list[DataAccession]) -> None:
+    for accession in accessions:
+        raw_id = (accession.accession_id or "").strip()
+        raw_url = (accession.url or "").strip()
+        joined = f"{raw_id} {raw_url}".lower()
+        system = "OTHER"
+        normalized_id = raw_id
+        if m := re.search(r"(10\.\d{4,9}/[^\s]+)", joined, flags=re.IGNORECASE):
+            doi = m.group(1).rstrip(".,;")
+            system = "DOI"
+            normalized_id = f"doi:{doi.lower()}"
+        elif re.search(r"\bGSE\d+\b", raw_id, flags=re.IGNORECASE):
+            token = re.search(r"\bGSE\d+\b", raw_id, flags=re.IGNORECASE).group(0).upper()
+            system = "GEO"
+            normalized_id = f"geo:{token}"
+        elif re.search(r"\b(?:SRP|SRR|SRA)\d+\b", raw_id, flags=re.IGNORECASE):
+            token = re.search(r"\b(?:SRP|SRR|SRA)\d+\b", raw_id, flags=re.IGNORECASE).group(0).upper()
+            system = "SRA"
+            normalized_id = f"sra:{token}"
+        elif raw_id:
+            normalized_id = f"id:{raw_id.lower()}"
+
+        repo_name = (accession.repository or "").strip().lower()
+        if any(k in repo_name for k in ("figshare", "zenodo", "dryad", "dataverse", "osf")):
+            repo_type = "generalist"
+        elif any(k in repo_name for k in ("geo", "sra", "ena", "arrayexpress")):
+            repo_type = "domain_specific"
+        else:
+            repo_type = "other"
+
+        accession.system = system
+        accession.normalized_id = normalized_id
+        accession.repository_type = repo_type
 
 
 def _infer_domain_profile(category: str | None, paper_type: str | None, paper_markdown: str) -> str:
@@ -350,7 +403,11 @@ def _extract_experimental_design_steps(
         step = ExperimentalDesignStep(
             step=1,
             action="Database search",
-            tools=["ACM", "IEEE", "Web of Science"],
+            tools=[
+                MethodTool(name="ACM Digital Library", software_type="literature_database"),
+                MethodTool(name="IEEE Xplore", software_type="literature_database"),
+                MethodTool(name="Web of Science", software_type="literature_database"),
+            ],
             count=int(db_total),
             context="Initial identification from indexed databases.",
             provenance=_locate_provenance(paper_markdown, "records from", source_table=None),
@@ -362,7 +419,9 @@ def _extract_experimental_design_steps(
             ExperimentalDesignStep(
                 step=len(steps) + 1,
                 action="Screening",
-                tools=["Covidence"] if "covidence" in paper_markdown.lower() else [],
+                tools=[MethodTool(name="Covidence", software_type="screening_platform")]
+                if "covidence" in paper_markdown.lower()
+                else [],
                 criteria="Title/Abstract" if "title" in paper_markdown.lower() and "abstract" in paper_markdown.lower() else None,
                 count=int(screened),
                 excluded=flow.get("excluded_title_abstract"),
@@ -390,6 +449,16 @@ def _extract_experimental_design_steps(
                 step=len(steps) + 1,
                 action="Inclusion",
                 included=int(included),
+                tools=[
+                    MethodTool(
+                        name="DisGeNET RDF",
+                        version="modified" if "modified disgenet" in paper_markdown.lower() else None,
+                        citation="[cite: 1]" if "disgenet" in paper_markdown.lower() else None,
+                        software_type="semantic_model",
+                    )
+                ]
+                if "disgenet" in paper_markdown.lower()
+                else [],
                 context="Final included studies/data sources.",
                 provenance=_locate_provenance(paper_markdown, "included", source_table=None),
             )
@@ -1325,6 +1394,96 @@ def _normalize_methods_for_domain(methods, domain_profile: str) -> None:
     methods.assay_type_mappings = mapped
 
 
+def _fallback_ontology_map(raw: str) -> tuple[str, str | None, str | None]:
+    low = raw.lower()
+    rules = [
+        ("manual literature", "literature search", "OBI:0000275", "OBI"),
+        ("literature search", "literature search", "OBI:0000275", "OBI"),
+        ("curation", "data curation", "NCIT:C153191", "NCIT"),
+        ("rdf", "resource description framework", "NCIT:C85873", "NCIT"),
+        ("statistical", "statistical analysis", "NCIT:C25656", "NCIT"),
+        ("scoping review", "scoping review", "NCIT:C17649", "NCIT"),
+        ("scoping_review", "scoping review", "NCIT:C17649", "NCIT"),
+        ("systematic review", "systematic review", "NCIT:C40514", "NCIT"),
+        ("systematic_review", "systematic review", "NCIT:C40514", "NCIT"),
+    ]
+    for needle, mapped, oid, vocab in rules:
+        if needle in low:
+            return mapped, oid, vocab
+    mapped = re.sub(r"\s+", " ", raw).strip().lower()[:80] or "unspecified assay"
+    return mapped, None, None
+
+
+def _resolve_assay_ontology_mappings(methods) -> None:
+    resolved: list[AssayTypeMapping] = []
+    seen: set[str] = set()
+    for m in methods.assay_type_mappings:
+        raw = (m.raw or "").strip() or (m.mapped_term or "").strip()
+        mapped_term = (m.mapped_term or "").strip()
+        ontology_id = (m.ontology_id or "").strip() or None
+        vocabulary = (m.vocabulary or "").strip() or None
+        if not ontology_id:
+            mapped_term, ontology_id, vocabulary = _fallback_ontology_map(raw)
+        key = f"{raw.lower()}::{(ontology_id or '').lower()}::{mapped_term.lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append(
+            AssayTypeMapping(
+                raw=raw,
+                mapped_term=mapped_term,
+                ontology_id=ontology_id,
+                vocabulary=vocabulary,
+            )
+        )
+    methods.assay_type_mappings = resolved
+
+
+def _partition_results_findings_vs_properties(results) -> None:
+    props = list(results.dataset_properties or [])
+    finds = list(results.experimental_findings or [])
+    if not props and not finds:
+        return
+    prop_signatures = {
+        f"{(p.property or '').strip().lower()}::{(p.value or '').strip().lower()}" for p in props
+    }
+    filtered_findings: list[ExperimentalFinding] = []
+    for f in finds:
+        metric = (f.metric or "").strip().lower()
+        value = (f.value or "").strip().lower()
+        sig = f"{metric}::{value}"
+        unit = (f.unit or "").strip().lower()
+        # Static artifact-size facts should not stay in findings.
+        is_static = any(
+            k in metric for k in ("row", "record", "column", "file size", "bytes", "dataset size", "source corpus")
+        ) or unit in {"rows", "bytes", "columns"}
+        if sig in prop_signatures or is_static:
+            continue
+        filtered_findings.append(f)
+    # If no scientific findings remain, keep percent/p-value style items from props.
+    if not filtered_findings:
+        for p in props:
+            unit = (p.unit or "").strip().lower()
+            value = (p.value or "").strip().lower()
+            if "%" in value or "p=" in value or unit in {"percent", "p-value"}:
+                filtered_findings.append(
+                    ExperimentalFinding(
+                        claim=f"{p.property} = {p.value}",
+                        metric=p.variable or p.property,
+                        value=p.value,
+                        unit=p.unit,
+                        statistical_significance=p.statistical_significance,
+                        effect_size=None,
+                        confidence_interval=None,
+                        comparison=None,
+                        context=p.context,
+                        confidence=p.confidence,
+                        provenance=p.provenance,
+                    )
+                )
+    results.experimental_findings = filtered_findings
+
+
 def _derive_keywords_from_text(paper_markdown: str, metadata_title: str) -> list[str]:
     text = f"{metadata_title}\n{paper_markdown}".lower()
     vocab = [
@@ -1516,7 +1675,9 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
             prisma_for_steps,
         )
     _normalize_methods_for_domain(methods, domain_profile)
+    _resolve_assay_ontology_mappings(methods)
     _reclassify_dataset_counts_to_sample_sizes(methods, results)
+    _partition_results_findings_vs_properties(results)
     step_timings_seconds["results"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "results", "seconds": step_timings_seconds["results"]})
     _print_step_timing("results", step_timings_seconds["results"])
@@ -1559,6 +1720,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         data_accessions=data_availability.data_accessions,
         related_resources=getattr(data_availability, "related_resources", []),
     )
+    _normalize_accession_identifiers(data_availability.data_accessions)
     if results.dataset_profile and results.dataset_profile.repository_contents:
         profile_contents = _normalize_file_entries(results.dataset_profile.repository_contents)
         results.dataset_profile.repository_contents = profile_contents
@@ -1735,6 +1897,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     methods.cell_types = _clean_placeholder_list(methods.cell_types)
     methods.assay_types = _clean_placeholder_list(methods.assay_types)
     _normalize_methods_for_domain(methods, _infer_domain_profile(metadata.category, metadata.paper_type, paper_markdown))
+    _resolve_assay_ontology_mappings(methods)
     if not metadata.keywords:
         metadata.keywords = _derive_keywords(
             metadata.keywords,
@@ -1758,6 +1921,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     if _is_blank(results.paper_type):
         results.paper_type = metadata.paper_type
     _attach_provenance_defaults(paper_markdown, methods, results)
+    _partition_results_findings_vs_properties(results)
 
     code_repositories = _derive_code_repositories(
         paper_markdown,

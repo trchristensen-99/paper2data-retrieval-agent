@@ -293,6 +293,9 @@ async def test_dataset_descriptor_backfills_profile_and_code(monkeypatch: pytest
     assert artifacts.record.archival_repositories
     assert artifacts.record.methods.experimental_design_steps
     assert artifacts.record.methods.assay_type_mappings
+    assert any((m.ontology_id or "") for m in artifacts.record.methods.assay_type_mappings)
+    assert any((a.normalized_id or "").startswith("doi:") for a in artifacts.record.data_accessions)
+    assert any((a.system or "") == "DOI" for a in artifacts.record.data_accessions)
     assert artifacts.record.results.experimental_findings
 
 
@@ -381,3 +384,33 @@ def test_data_asset_derivation_from_accessions() -> None:
     )
     assert len(assets) >= 2
     assert any(a.content_type == "gene_disease_associations" for a in assets)
+
+
+def test_partition_results_findings_vs_properties_dedupes() -> None:
+    results = ResultsSummary(
+        paper_type="dataset_descriptor",
+        dataset_properties=[
+            DescriptiveStat(property="record_count", value="4565", unit="rows", context="dataset size"),
+            DescriptiveStat(property="disease_mesh_mapping", value="58.7%", unit="percent", context="coverage"),
+        ],
+        experimental_findings=[
+            Finding(
+                claim="record_count = 4565",
+                metric="record_count",
+                value="4565",
+                unit="rows",
+                context="dataset size",
+                confidence=0.8,
+            )
+        ],
+    )
+    manager._partition_results_findings_vs_properties(results)
+    assert all((f.metric or "") != "record_count" for f in results.experimental_findings)
+    assert any("58.7%" in (f.value or "") for f in results.experimental_findings)
+
+
+def test_locate_provenance_resolves_source_page() -> None:
+    text = "Page 1\nIntro line\n\fPage 2\nTarget value appears here"
+    prov = manager._locate_provenance(text, "Target value")
+    assert prov is not None
+    assert prov.source_page == 2

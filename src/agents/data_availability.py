@@ -55,6 +55,8 @@ Critical classification rules:
 Output rules:
 - Populate fields with extracted data values.
 - Do NOT return JSON schema definitions.
+- For each accession, include identifier normalization fields when possible:
+  `system`, `normalized_id`, `repository_type`.
 - Put non-dataset links/resources in `related_resources` with type:
   visualization | tool | standard | related_dataset.
 """

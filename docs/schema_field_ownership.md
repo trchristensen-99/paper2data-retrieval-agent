@@ -16,9 +16,14 @@ This document defines where each `PaperRecord` field is populated in the pipelin
 8. optional `metadata_enrichment_agent`
 9. manager deterministic post-processing
    - URL normalization/canonicalization
+   - table topology normalization + de-duplication
    - dataset/profile backfills
    - PRISMA normalization
+   - sample-size vs findings reclassification
+   - data-asset derivation from accession files
    - keyword/method placeholder cleanup
+   - ontology-grounded assay mapping normalization
+   - exact-substring provenance normalization
    - code/resource classification
    - file-list normalization
 10. `synthesis_agent` (report/log generation)
@@ -49,7 +54,8 @@ This document defines where each `PaperRecord` field is populated in the pipelin
     - organism normalization is already applied in methods flow
     - domain-profile normalization (bio vs meta-research vs computational)
     - `experimental_design_steps` atomization (chronological, count-aware steps)
-    - `assay_type_mappings` ontology-style normalization (`raw`, `mapped_term`, `ontology_id`)
+    - `assay_type_mappings` ontology-style normalization (`raw`, `mapped_term`, `ontology_id`, `vocabulary`)
+    - hard coercion of malformed model outputs (string steps -> structured step objects)
 
 ### `results.*`
 
@@ -60,6 +66,8 @@ This document defines where each `PaperRecord` field is populated in the pipelin
     - populate fallback `dataset_properties`
     - parse/enrich `tables_extracted`
       - row-level `data` objects (SQL-ingestible)
+      - structural normalization of section-break rows into explicit `category` column where needed
+      - duplicate table variant suppression (`Table N` dropped when normalized `Table N-part*` exists)
       - per-table provenance hints
     - PRISMA normalization/backfill via typed `PrismaFlow`
     - `record_count` vs `source_corpus_size` consistency
@@ -67,6 +75,12 @@ This document defines where each `PaperRecord` field is populated in the pipelin
     - split dimensions into `physical_dimensions` and `conceptual_dimensions`
     - column schema cleanup (null/ghost filtering)
     - quantitative finding backfill for key percentage/stat claims when extractor output is sparse
+    - fallback finding derivation from numeric dataset properties
+    - strict partition rule between `dataset_properties` and `experimental_findings`:
+      - static artifact descriptors (rows, columns, bytes, file/record counts, version/license/format) stay in `dataset_properties`
+      - scientific outcome statements (percentages, p-values, effect-style results) stay in `experimental_findings`
+      - dedupe pass removes duplicate metric/value pairs across both collections
+    - reclassification of resource/input counts into `methods.sample_sizes`
     - per-item provenance defaults for findings/properties/tables
 
 ### `data_accessions[*]`
@@ -80,6 +94,10 @@ This document defines where each `PaperRecord` field is populated in the pipelin
   - manager file list merge + cleanup (`P2D_STRICT_FILE_LIST` optional strict mode)
   - classification filtering (external references removed from `data_accessions`)
   - canonical figshare URL construction when article/file ids are known
+  - identifier normalization for joins:
+    - `system` (`DOI`, `GEO`, `SRA`, `OTHER`)
+    - `normalized_id` (e.g., `doi:...`, `geo:GSE...`, `sra:SRR...`)
+    - `repository_type` (`generalist`, `domain_specific`, `other`)
 
 ### `data_assets[*]`
 
@@ -147,6 +165,7 @@ After synthesis returns, manager force-overwrites structured record sections wit
 - `methods`
 - `results`
 - `data_accessions`
+- `data_assets`
 - `data_availability`
 - `code_repositories`
 - `vcs_repositories`
