@@ -13,7 +13,8 @@ from src.utils.retry import run_with_rate_limit_retry
 
 METHODS_PROMPT = """Extract methods details needed for statistical assessment:
 - organisms, cell types, assay types
-- assay_type_mappings using normalized ontology-style terms where possible
+- assay_type_mappings using normalized ontology terms where possible.
+  Prefer OBI/EFO/NCIT IDs when identifiable from text (do not invent IDs).
 - sample sizes
 - statistical tests used
 - concise but faithful experimental design summary

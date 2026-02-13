@@ -27,6 +27,7 @@ from src.agents.results import results_agent, run_results_agent
 from src.agents.synthesis import fallback_synthesis, run_synthesis_agent, synthesis_agent
 from src.schemas.models import (
     AssayTypeMapping,
+    DataAsset,
     DataAccession,
     DataAvailabilityReport,
     DatasetColumn,
@@ -319,21 +320,22 @@ def _assay_mapping_for(raw_value: str) -> AssayTypeMapping:
     raw = re.sub(r"\s+", " ", raw_value.strip())
     low = raw.lower()
     mapping = [
-        ("rna-seq", "RNA_SEQ", "OBI:0001271"),
-        ("chip-seq", "CHIP_SEQ", "OBI:0000716"),
-        ("atac-seq", "ATAC_SEQ", "OBI:0002039"),
-        ("mpra", "MPRA", "OBI:0002675"),
-        ("scoping review", "SCOPING_REVIEW", "NCIT:C17649"),
-        ("systematic review", "SYSTEMATIC_REVIEW", "NCIT:C40514"),
-        ("meta-analysis", "META_ANALYSIS", "NCIT:C53326"),
-        ("statistical", "STATISTICAL_ANALYSIS", "NCIT:C25656"),
-        ("benchmark", "BENCHMARK_EVALUATION", "NCIT:C142678"),
+        ("rna-seq", "RNA sequencing assay", "OBI:0001271", "OBI"),
+        ("chip-seq", "chromatin immunoprecipitation sequencing", "OBI:0000716", "OBI"),
+        ("atac-seq", "ATAC-seq assay", "OBI:0002039", "OBI"),
+        ("mpra", "massively parallel reporter assay", "OBI:0002675", "OBI"),
+        ("manual literature curation", "literature curation", "NCIT:C159670", "NCIT"),
+        ("scoping review", "scoping review", "NCIT:C17649", "NCIT"),
+        ("systematic review", "systematic review", "NCIT:C40514", "NCIT"),
+        ("meta-analysis", "meta-analysis", "NCIT:C53326", "NCIT"),
+        ("statistical", "statistical analysis", "NCIT:C25656", "NCIT"),
+        ("benchmark", "benchmarking assessment", "NCIT:C142678", "NCIT"),
     ]
-    for needle, mapped, ont in mapping:
+    for needle, mapped, ont, vocab in mapping:
         if needle in low:
-            return AssayTypeMapping(raw=raw, mapped_term=mapped, ontology_id=ont)
+            return AssayTypeMapping(raw=raw, mapped_term=mapped, ontology_id=ont, vocabulary=vocab)
     mapped = re.sub(r"[^a-z0-9]+", "_", low).strip("_").upper() or "OTHER_ANALYSIS"
-    return AssayTypeMapping(raw=raw, mapped_term=mapped, ontology_id=None)
+    return AssayTypeMapping(raw=raw, mapped_term=mapped, ontology_id=None, vocabulary=None)
 
 
 def _extract_experimental_design_steps(
@@ -465,6 +467,159 @@ def _derive_findings_from_dataset_properties(
             )
         )
     return out[:25]
+
+
+def _to_number(value: str | None) -> int | float | None:
+    if value is None:
+        return None
+    txt = str(value).strip().replace(",", "")
+    if not txt:
+        return None
+    try:
+        if "." in txt:
+            return float(txt)
+        return int(txt)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _normalize_table_topology(tables: list[ExtractedTable]) -> list[ExtractedTable]:
+    if not tables:
+        return []
+    grouped: dict[str, list[ExtractedTable]] = {}
+    for t in tables:
+        base = re.sub(r"[-_ ]?part[ab]\b.*$", "", (t.table_id or "").strip(), flags=re.IGNORECASE).strip()
+        key = base.lower() or (t.table_id or "").lower()
+        grouped.setdefault(key, []).append(t)
+
+    out: list[ExtractedTable] = []
+    for _, group in grouped.items():
+        has_parts = any(re.search(r"part[ab]", (t.table_id or ""), flags=re.IGNORECASE) for t in group)
+        for t in group:
+            if has_parts and re.search(r"^table\s*\d+\s*$", (t.table_id or "").strip(), flags=re.IGNORECASE):
+                continue
+            if not t.data:
+                out.append(t)
+                continue
+            # Convert section-header rows into explicit category column.
+            columns = list(t.columns or [])
+            if not columns:
+                first_row = t.data[0]
+                columns = list(first_row.keys())
+            primary = columns[0] if columns else None
+            value_cols = columns[1:] if len(columns) > 1 else []
+            current_category: str | None = None
+            normalized_rows: list[dict[str, str]] = []
+            need_category = False
+            for row in t.data:
+                if not isinstance(row, dict):
+                    continue
+                row_primary = str(row.get(primary, "")).strip() if primary else ""
+                non_primary_values = [str(row.get(c, "")).strip() for c in value_cols]
+                numeric_like = [v for v in non_primary_values if re.search(r"\d", v)]
+                blank_values = all(not v for v in non_primary_values)
+                if row_primary and not numeric_like and blank_values and value_cols:
+                    current_category = row_primary
+                    need_category = True
+                    continue
+                new_row = {str(k): str(v) for k, v in row.items()}
+                if current_category:
+                    new_row["category"] = current_category
+                    need_category = True
+                normalized_rows.append(new_row)
+            if need_category:
+                t.data = normalized_rows
+                if "category" not in columns:
+                    t.columns = ["category"] + columns
+            else:
+                t.data = normalized_rows
+            out.append(t)
+    # Deduplicate by table_id + columns.
+    deduped: list[ExtractedTable] = []
+    seen: set[str] = set()
+    for t in out:
+        key = f"{(t.table_id or '').lower()}::{','.join((t.columns or []))}::{len(t.data)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(t)
+    return deduped
+
+
+def _reclassify_dataset_counts_to_sample_sizes(methods, results) -> None:
+    moved_prefixes = (
+        "record_count",
+        "data_point_count",
+        "source_corpus_size",
+        "unique_",
+        "total_",
+        "count_",
+        "gene_disease",
+        "causative_genes",
+        "diseases",
+    )
+    keep: list[DescriptiveStat] = []
+    for prop in results.dataset_properties:
+        p = (prop.property or "").strip().lower()
+        if any(p.startswith(prefix) for prefix in moved_prefixes):
+            methods.sample_sizes[p] = prop.value
+        else:
+            keep.append(prop)
+    results.dataset_properties = keep
+
+
+def _infer_asset_content_type(file_name: str) -> str:
+    low = file_name.lower()
+    if ("gene" in low and "disease" in low) or ("gene-rd" in low) or ("provenance" in low and "gene" in low):
+        return "gene_disease_associations"
+    if "readme" in low:
+        return "metadata_readme"
+    if low.endswith(".ipynb") or low.endswith(".py"):
+        return "analysis_code"
+    if "visualization" in low or "sunburst" in low:
+        return "visualization_link"
+    if low.endswith(".xlsx") or low.endswith(".csv") or low.endswith(".tsv"):
+        return "tabular_dataset"
+    return "dataset_asset"
+
+
+def _derive_data_assets(
+    *,
+    data_accessions: list[DataAccession],
+    dataset_profile: DatasetProfile | None,
+    paper_markdown: str,
+) -> list[DataAsset]:
+    assets: list[DataAsset] = []
+    seen: set[str] = set()
+    row_hint = None
+    if dataset_profile and dataset_profile.record_count is not None:
+        row_hint = dataset_profile.record_count
+    for accession in data_accessions:
+        files = list(accession.files_listed or [])
+        if not files and accession.url:
+            maybe_name = accession.url.rstrip("/").split("/")[-1]
+            if "." in maybe_name:
+                files = [maybe_name]
+        for file_name in files:
+            fname = str(file_name).strip()
+            if not fname:
+                continue
+            key = f"{(accession.accession_id or '').lower()}::{fname.lower()}"
+            if key in seen:
+                continue
+            seen.add(key)
+            assets.append(
+                DataAsset(
+                    content_type=_infer_asset_content_type(fname),
+                    file_name=fname,
+                    row_count=row_hint if _infer_asset_content_type(fname) in {"tabular_dataset", "gene_disease_associations"} else None,
+                    url=accession.download_probe_url or accession.url,
+                    source_accession_id=accession.accession_id,
+                    confidence=0.86 if accession.is_accessible else 0.72,
+                    provenance=_locate_provenance(paper_markdown, fname),
+                )
+            )
+    return assets
 
 
 def _extract_prisma_flow(text: str, existing: dict[str, int] | None = None) -> dict[str, int]:
@@ -1193,21 +1348,24 @@ def _derive_keywords_from_text(paper_markdown: str, metadata_title: str) -> list
 
 
 def _attach_provenance_defaults(paper_markdown: str, methods, results) -> None:
+    def _normalize_prov(prov: Provenance | None, seed: str, source_table: str | None = None) -> Provenance | None:
+        if prov is not None and (prov.text_segment or "").strip():
+            seg = str(prov.text_segment).strip()
+            if seg in paper_markdown:
+                return prov
+        return _locate_provenance(paper_markdown, seed, source_table=source_table)
+
     for idx, step in enumerate(methods.experimental_design_steps, start=1):
-        if step.provenance is None:
-            seed = step.action or step.context or f"step {idx}"
-            step.provenance = _locate_provenance(paper_markdown, seed)
+        seed = step.action or step.context or f"step {idx}"
+        step.provenance = _normalize_prov(step.provenance, seed)
     for finding in results.experimental_findings:
-        if finding.provenance is None:
-            seed = finding.value or finding.claim
-            finding.provenance = _locate_provenance(paper_markdown, seed)
+        seed = finding.value or finding.claim
+        finding.provenance = _normalize_prov(finding.provenance, seed)
     for prop in results.dataset_properties:
-        if prop.provenance is None:
-            seed = prop.value or prop.property
-            prop.provenance = _locate_provenance(paper_markdown, seed)
+        seed = prop.value or prop.property
+        prop.provenance = _normalize_prov(prop.provenance, seed)
     for table in results.tables_extracted:
-        if table.provenance is None:
-            table.provenance = _locate_provenance(paper_markdown, table.table_id, source_table=table.table_id)
+        table.provenance = _normalize_prov(table.provenance, table.table_id, source_table=table.table_id)
 
 
 def _keywords_need_repair(values: list[str]) -> bool:
@@ -1340,6 +1498,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         paper_markdown=paper_markdown,
         anatomy=anatomy,
     )
+    results.tables_extracted = _normalize_table_topology(results.tables_extracted)
     if not results.experimental_findings:
         results.experimental_findings = _extract_quantitative_findings_from_text(
             paper_markdown,
@@ -1357,6 +1516,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
             prisma_for_steps,
         )
     _normalize_methods_for_domain(methods, domain_profile)
+    _reclassify_dataset_counts_to_sample_sizes(methods, results)
     step_timings_seconds["results"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "results", "seconds": step_timings_seconds["results"]})
     _print_step_timing("results", step_timings_seconds["results"])
@@ -1621,12 +1781,18 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
             )
             break
     vcs_repositories, archival_repositories = _split_code_repositories(code_repositories)
+    data_assets = _derive_data_assets(
+        data_accessions=data_availability.data_accessions,
+        dataset_profile=results.dataset_profile,
+        paper_markdown=paper_markdown,
+    )
 
     synthesis_input = SynthesisInput(
         metadata=metadata,
         methods=methods,
         results=results,
         data_accessions=data_availability.data_accessions,
+        data_assets=data_assets,
         data_availability=data_availability.data_availability,
         code_repositories=vcs_repositories,
         vcs_repositories=vcs_repositories,
@@ -1651,6 +1817,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     synthesis.record.methods = methods
     synthesis.record.results = results
     synthesis.record.data_accessions = data_availability.data_accessions
+    synthesis.record.data_assets = data_assets
     synthesis.record.data_availability = data_availability.data_availability
     synthesis.record.code_repositories = vcs_repositories
     synthesis.record.vcs_repositories = vcs_repositories

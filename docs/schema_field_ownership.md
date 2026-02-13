@@ -81,6 +81,14 @@ This document defines where each `PaperRecord` field is populated in the pipelin
   - classification filtering (external references removed from `data_accessions`)
   - canonical figshare URL construction when article/file ids are known
 
+### `data_assets[*]`
+
+- First/final: manager deterministic derivation from `data_accessions[*].files_listed`, accession URLs, and dataset profile hints.
+- Includes:
+  - `content_type` classification (e.g., `gene_disease_associations`, `tabular_dataset`, `analysis_code`)
+  - file-level URL linkage (`download_probe_url`/accession URL)
+  - optional row-count hints and provenance
+
 ### `data_availability.*`
 
 - First: `data_availability_agent`

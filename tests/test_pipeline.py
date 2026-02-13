@@ -312,6 +312,32 @@ def test_table_block_extraction_includes_rows() -> None:
     assert tables[0].provenance is not None
 
 
+def test_table_topology_normalizer_adds_category_and_dedupes() -> None:
+    raw = [
+        manager.ExtractedTable(
+            table_id="Table 2",
+            columns=["journal", "count", "percent"],
+            data=[
+                {"journal": "New Disease Description", "count": "", "percent": ""},
+                {"journal": "Am. J. Hum. Genet.", "count": "457", "percent": "14.9"},
+                {"journal": "New Gene Discovery", "count": "", "percent": ""},
+                {"journal": "Nature Genetics", "count": "1137", "percent": "26.7"},
+            ],
+            key_content=[],
+        ),
+        manager.ExtractedTable(
+            table_id="Table 2-partA",
+            columns=["category", "journal", "count", "percent"],
+            data=[{"category": "New Disease Description", "journal": "Am. J. Hum. Genet.", "count": "457", "percent": "14.9"}],
+            key_content=[],
+        ),
+    ]
+    out = manager._normalize_table_topology(raw)
+    ids = {t.table_id for t in out}
+    assert "Table 2-partA" in ids
+    assert "Table 2" not in ids
+
+
 @pytest.mark.asyncio
 async def test_enrich_accession_repairs_url(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _check_url(url: str):
@@ -333,3 +359,25 @@ async def test_enrich_accession_repairs_url(monkeypatch: pytest.MonkeyPatch) -> 
     assert out.is_accessible is True
     assert out.url_repaired is True
     assert "file=57701437" in (out.url or "")
+
+
+def test_data_asset_derivation_from_accessions() -> None:
+    accessions = [
+        DataAccession(
+            accession_id="10.6084/m9.figshare.29551001",
+            category="primary_dataset",
+            repository="Figshare",
+            url="https://figshare.com/articles/dataset/example/29551001",
+            description="dataset",
+            files_listed=["README.md", "Gene-RD-Provenance_V2.1.txt"],
+            is_accessible=True,
+        )
+    ]
+    profile = manager.DatasetProfile(record_count=4565)
+    assets = manager._derive_data_assets(
+        data_accessions=accessions,
+        dataset_profile=profile,
+        paper_markdown="Gene-RD-Provenance_V2.1.txt is provided.",
+    )
+    assert len(assets) >= 2
+    assert any(a.content_type == "gene_disease_associations" for a in assets)

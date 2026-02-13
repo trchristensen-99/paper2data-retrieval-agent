@@ -54,6 +54,7 @@ def fallback_synthesis(payload: SynthesisInput) -> SynthesisOutput:
         methods=payload.methods,
         results=payload.results,
         data_accessions=payload.data_accessions,
+        data_assets=payload.data_assets,
         data_availability=payload.data_availability,
         code_repositories=payload.code_repositories,
         vcs_repositories=payload.vcs_repositories,

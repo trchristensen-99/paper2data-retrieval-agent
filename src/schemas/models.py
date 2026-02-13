@@ -168,6 +168,7 @@ class AssayTypeMapping(BaseModel):
     raw: str
     mapped_term: str
     ontology_id: Optional[str] = None
+    vocabulary: Optional[str] = None
 
 
 class ExperimentalDesignStep(BaseModel):
@@ -227,6 +228,16 @@ class DataAvailabilityReport(BaseModel):
     @classmethod
     def _none_to_list(cls, value):
         return [] if value is None else value
+
+
+class DataAsset(BaseModel):
+    content_type: str
+    file_name: str
+    row_count: Optional[int] = None
+    url: Optional[str] = None
+    source_accession_id: Optional[str] = None
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    provenance: Optional[Provenance] = None
 
 
 class MethodsSummary(BaseModel):
@@ -352,6 +363,7 @@ class PaperRecord(BaseModel):
     methods: MethodsSummary
     results: ResultsSummary
     data_accessions: list[DataAccession]
+    data_assets: list[DataAsset] = []
     data_availability: DataAvailabilityReport
     code_repositories: list[str] = []
     vcs_repositories: list[str] = []
@@ -365,6 +377,7 @@ class PaperRecord(BaseModel):
 
     @field_validator(
         "data_accessions",
+        "data_assets",
         "code_repositories",
         "vcs_repositories",
         "archival_repositories",
@@ -381,6 +394,7 @@ class SynthesisInput(BaseModel):
     methods: MethodsSummary
     results: ResultsSummary
     data_accessions: list[DataAccession]
+    data_assets: list[DataAsset] = []
     data_availability: DataAvailabilityReport
     code_repositories: list[str] = []
     vcs_repositories: list[str] = []
