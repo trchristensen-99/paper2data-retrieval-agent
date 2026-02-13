@@ -4,9 +4,9 @@ import re
 from time import perf_counter
 from typing import Any
 
-import httpx
 from agents import function_tool
 
+from src.utils.http_client import make_async_client
 from src.utils.logging import log_event
 
 
@@ -49,7 +49,7 @@ async def check_zenodo_record_request(identifier: str) -> dict:
     result["record_id"] = record_id
 
     try:
-        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+        async with make_async_client(timeout_seconds=25.0, follow_redirects=True) as client:
             if not record_id:
                 # Attempt DOI resolution to discover final Zenodo URL.
                 resolved = await client.get(identifier)
@@ -106,7 +106,7 @@ async def check_figshare_record_request(identifier: str) -> dict:
     result["article_id"] = article_id
 
     try:
-        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+        async with make_async_client(timeout_seconds=25.0, follow_redirects=True) as client:
             if not article_id:
                 resolved = await client.get(identifier)
                 resolved.raise_for_status()
@@ -158,7 +158,7 @@ async def estimate_download_time_request(url: str, sample_bytes: int = 1024 * 10
     try:
         start = perf_counter()
         bytes_read = 0
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        async with make_async_client(timeout_seconds=30.0, follow_redirects=True) as client:
             async with client.stream("GET", url, headers=headers) as resp:
                 resp.raise_for_status()
                 async for chunk in resp.aiter_bytes(64 * 1024):

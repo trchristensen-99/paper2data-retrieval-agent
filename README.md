@@ -14,11 +14,19 @@ Multi-agent scientific paper retrieval pipeline for the Paper2Data project.
 3. Run pipeline:
    - `uv run python -m src.main ../data_for_agents_example/data_for_retrieval_agent/s41597-021-00905-y.md`
    - optional faster run: `uv run python -m src.main ../data_for_agents_example/data_for_retrieval_agent/s41597-021-00905-y.md --fast`
+   - strict network-gated run: `uv run python -m src.main ../data_for_agents_example/data_for_retrieval_agent/s41597-021-00905-y.md --strict-network`
+
+4. Run external service preflight (recommended before long runs):
+   - `uv run python -m src.network_preflight`
+   - strict exit code for CI/debugging: `uv run python -m src.network_preflight --strict --json`
 
 If runs fail with `APIConnectionError` / `nodename nor servname provided`:
 - Check DNS: `nslookup api.openai.com`
 - Ensure VPN/proxy/firewall is not blocking API access.
 - On macOS, set DNS servers (Network Settings) to `1.1.1.1` and `8.8.8.8`, then retry.
+- Configure proxy if required by your network:
+  - `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` (standard)
+  - or `P2D_HTTP_PROXY` in `.env`
 
 ## Model Configuration
 - Default model for all agents is `gpt-5-nano` (cost-optimized).
@@ -70,6 +78,8 @@ You can ingest extraction outputs into a persistent SQLite database that support
 - Compare baseline vs updated batch summaries:
   - `uv run python -m src.compare_batches --baseline <baseline_summary.json> --updated <updated_summary.json>`
   - optional faster batch run: `uv run python -m src.batch_run --input-root ../data_for_agents_example/data30_final --output-root outputs/reextract_fast --fast`
+  - strict network-gated batch run:
+    - `uv run python -m src.batch_run --input-root ../data_for_agents_example/data30_final --output-root outputs/reextract --strict-network`
 
 When a new entry matches an existing paper (by DOI, PMID, or normalized title), records are harmonized using an AI merge agent with deterministic fallback rules.
 - Each canonical paper row represents one paper source (`source_count=1`); consolidated ingestion history is tracked in `paper_versions` (not shown in the main table).
@@ -87,7 +97,7 @@ When a new entry matches an existing paper (by DOI, PMID, or normalized title), 
 - `extraction_confidence` is computed deterministically from:
   - metadata coverage (title/authors/DOI-PMID/venue),
   - methods coverage (design/assay/sample size/stat tests),
-  - results coverage (quantitative findings + spin assessment),
+  - results coverage (paper-type-aware completeness + overinterpretation penalty),
   - data-access verification status,
   - QC penalties for missing/suspicious empty fields.
 - It is no longer purely model self-reported.

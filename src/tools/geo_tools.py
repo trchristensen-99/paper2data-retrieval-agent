@@ -3,9 +3,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import httpx
 from agents import function_tool
 
+from src.utils.http_client import make_async_client
 from src.utils.logging import log_event
 
 EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
@@ -33,7 +33,7 @@ async def check_geo_accession_request(accession: str) -> dict:
             "term": accession,
             "retmode": "json",
         }
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with make_async_client(timeout_seconds=20.0, follow_redirects=False) as client:
             search = await client.get(f"{EUTILS_BASE}/esearch.fcgi", params=params)
             search.raise_for_status()
             ids = search.json().get("esearchresult", {}).get("idlist", [])
@@ -85,7 +85,7 @@ async def check_sra_accession_request(accession: str) -> dict:
             "term": accession,
             "retmode": "json",
         }
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with make_async_client(timeout_seconds=20.0, follow_redirects=False) as client:
             search = await client.get(f"{EUTILS_BASE}/esearch.fcgi", params=params)
             search.raise_for_status()
             ids = search.json().get("esearchresult", {}).get("idlist", [])

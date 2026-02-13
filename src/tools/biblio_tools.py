@@ -3,9 +3,9 @@ from __future__ import annotations
 from difflib import SequenceMatcher
 from urllib.parse import quote
 
-import httpx
 from agents import function_tool
 
+from src.utils.http_client import make_async_client
 from src.utils.logging import log_event
 
 
@@ -24,7 +24,7 @@ async def search_crossref_by_title(title: str) -> dict:
         "error": None,
     }
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with make_async_client(timeout_seconds=20.0, follow_redirects=True) as client:
             resp = await client.get(
                 "https://api.crossref.org/works",
                 params={"query.title": title, "rows": 1},
@@ -68,7 +68,7 @@ async def search_pubmed(title_or_doi: str) -> dict:
         "error": None,
     }
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with make_async_client(timeout_seconds=20.0, follow_redirects=True) as client:
             search = await client.get(
                 "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
                 params={"db": "pubmed", "term": title_or_doi, "retmode": "json", "retmax": 1},
@@ -100,7 +100,7 @@ async def search_crossref_by_doi(doi: str) -> dict:
     }
     try:
         safe_doi = quote(doi.strip(), safe="")
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with make_async_client(timeout_seconds=20.0, follow_redirects=True) as client:
             resp = await client.get(f"https://api.crossref.org/works/{safe_doi}")
             resp.raise_for_status()
             message = resp.json().get("message", {})

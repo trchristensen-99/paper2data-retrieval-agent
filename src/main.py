@@ -8,7 +8,7 @@ from pathlib import Path
 
 from src.agents.manager import run_pipeline
 from src.utils.env import load_env_file
-from src.utils.network import check_openai_dns
+from src.utils.network import check_external_service_access, check_openai_dns
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -24,6 +24,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--fast",
         action="store_true",
         help="Fast mode: skip expensive deep checks (data availability, QC, enrichment/repair retries)",
+    )
+    parser.add_argument(
+        "--strict-network",
+        action="store_true",
+        help="Require external service preflight checks to pass before running.",
     )
     return parser
 
@@ -82,6 +87,20 @@ def main() -> None:
         )
     parser = _build_arg_parser()
     args = parser.parse_args()
+    strict_network = bool(args.strict_network)
+    svc_ok, svc_msg, checks = check_external_service_access()
+    if strict_network and not svc_ok:
+        failure_lines = [
+            f"{c['name']}: status={c['status_code']} error={c['error']}"
+            for c in checks
+            if not c["ok"]
+        ]
+        raise RuntimeError(
+            f"{svc_msg}\n" + "\n".join(failure_lines) + "\n"
+            "Set proxy/DNS and retry, or run without --strict-network."
+        )
+    if not svc_ok:
+        print(f"[network] WARNING: {svc_msg}. Continuing without strict enforcement.", flush=True)
     summary = asyncio.run(_run(args))
 
     print("Paper2Data retrieval pipeline complete")

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import httpx
 from agents import function_tool
 
 from src.utils.logging import log_event
+from src.utils.http_client import make_async_client
 
 
 async def check_url_request(url: str) -> dict:
@@ -15,7 +15,7 @@ async def check_url_request(url: str) -> dict:
         "error": None,
     }
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with make_async_client(timeout_seconds=15.0, follow_redirects=True) as client:
             response = await client.head(url)
             if response.status_code >= 400:
                 response = await client.get(url)

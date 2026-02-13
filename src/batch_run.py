@@ -9,7 +9,7 @@ from pathlib import Path
 
 from src.agents.manager import PipelineArtifacts, run_pipeline
 from src.utils.env import load_env_file
-from src.utils.network import check_openai_dns
+from src.utils.network import check_external_service_access, check_openai_dns
 
 CRITICAL_FIELDS = [
     "metadata.title",
@@ -218,18 +218,36 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fast mode: skip expensive deep checks (data availability, QC, enrichment/repair retries)",
     )
+    parser.add_argument(
+        "--strict-network",
+        action="store_true",
+        help="Require external service preflight checks to pass before batch execution.",
+    )
     return parser
 
 
 def main() -> None:
     load_env_file()
+    args = _build_parser().parse_args()
     ok, msg = check_openai_dns()
     if not ok:
         raise RuntimeError(
             f"{msg}. Fix DNS/network and retry batch. "
             "Try: nslookup api.openai.com, then set DNS to 1.1.1.1 or 8.8.8.8."
         )
-    args = _build_parser().parse_args()
+    svc_ok, svc_msg, checks = check_external_service_access()
+    if bool(args.strict_network) and not svc_ok:
+        failure_lines = [
+            f"{c['name']}: status={c['status_code']} error={c['error']}"
+            for c in checks
+            if not c["ok"]
+        ]
+        raise RuntimeError(
+            f"{svc_msg}\n" + "\n".join(failure_lines) + "\n"
+            "Set proxy/DNS and retry, or run without --strict-network."
+        )
+    if not svc_ok:
+        print(f"[network] WARNING: {svc_msg}. Continuing without strict enforcement.", flush=True)
     summary_path = asyncio.run(_run_batch(args.input_root, args.output_root, fast_mode=bool(args.fast)))
     print(f"Batch run complete: {summary_path}")
 
