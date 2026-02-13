@@ -29,7 +29,7 @@ If runs fail with `APIConnectionError` / `nodename nor servname provided`:
   - or `P2D_HTTP_PROXY` in `.env`
 
 ## Model Configuration
-- Default model for all agents is `gpt-5-nano` (cost-optimized).
+- Default model for all agents is `gpt-5-mini`.
 - Override globally:
   - `P2D_DEFAULT_MODEL=<model_name>`
 - Override individual agents if needed:
@@ -45,11 +45,11 @@ If runs fail with `APIConnectionError` / `nodename nor servname provided`:
 
 ## Architecture
 - Manager agent orchestrates:
-  1. Metadata Agent (`gpt-5-nano` by default)
-  2. Methods Agent (`gpt-5-nano` by default)
-  3. Results Agent (`gpt-5-nano` by default)
-  4. Data Availability Agent (`gpt-5-nano` by default + tools)
-  5. Synthesis Agent (`gpt-5-nano` by default)
+  1. Metadata Agent (`gpt-5-mini` by default)
+  2. Methods Agent (`gpt-5-mini` by default)
+  3. Results Agent (`gpt-5-mini` by default)
+  4. Data Availability Agent (`gpt-5-mini` by default + tools)
+  5. Synthesis Agent (`gpt-5-mini` by default)
 
 All agent interactions are logged for debugging in output retrieval logs.
 

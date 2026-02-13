@@ -207,6 +207,14 @@ def _resource_type(name: str, url: str) -> str:
 
 
 def _extract_related_resources_from_text(paper_markdown: str) -> list[RelatedResource]:
+    allow_domains = {
+        "render.com",
+        "covidence.org",
+        "oecd.ai",
+        "airc.nist.gov",
+        "global-index.ai",
+        "jupyter.org",
+    }
     urls = re.findall(r"https?://[^\s)\]]+", paper_markdown, flags=re.IGNORECASE)
     out: list[RelatedResource] = []
     seen: set[str] = set()
@@ -220,7 +228,12 @@ def _extract_related_resources_from_text(paper_markdown: str) -> list[RelatedRes
         seen.add(key)
         if any(k in key for k in ("figshare", "fgshare", "zenodo", "gse", "sra", "10.6084/m9")):
             continue
+        if any(k in key for k in ("doi.org", "arxiv.org")):
+            continue
         name = re.sub(r"^https?://", "", clean).split("/")[0]
+        domain = name.lower().replace("www.", "")
+        if domain not in allow_domains:
+            continue
         out.append(
             RelatedResource(
                 name=name,
@@ -559,6 +572,8 @@ async def run_data_availability_agent(
             output.data_availability.overall_status = "partially_accessible"
         if output.data_availability.check_status == "ok":
             output.data_availability.check_status = "partial"
+    if output.data_availability.check_status == "failed" and output.data_availability.overall_status == "accessible":
+        output.data_availability.overall_status = "partially_accessible"
     log_event(
         "agent.data_availability.end",
         {
@@ -576,7 +591,16 @@ async def fallback_data_availability_from_text(
 ) -> DataAvailabilityOutput:
     recovered = _extract_candidate_accessions_from_text(paper_markdown, paper_type)
     enriched = await _enrich_data_accessions(recovered)
-    status = "accessible" if any(x.is_accessible for x in enriched) else "not_checked"
+    any_true = any(x.is_accessible is True for x in enriched)
+    any_false = any(x.is_accessible is False for x in enriched)
+    if any_true and any_false:
+        status = "partially_accessible"
+    elif any_true:
+        status = "partially_accessible"
+    elif any_false:
+        status = "unavailable"
+    else:
+        status = "not_checked"
     discrepancies: list[str] = []
     if reason:
         discrepancies.append(f"data_availability_agent_error: {reason}")
@@ -588,7 +612,7 @@ async def fallback_data_availability_from_text(
         data_availability=DataAvailabilityReport(
             overall_status=status,
             claimed_repositories=sorted({x.repository for x in enriched}),
-            verified_repositories=sorted({x.repository for x in enriched if x.is_accessible}),
+            verified_repositories=sorted({x.repository for x in enriched if x.is_accessible is True}),
             discrepancies=discrepancies,
             notes="Fallback data-availability parser used.",
             check_status="failed",

@@ -307,14 +307,6 @@ def _extract_prisma_flow(text: str, existing: dict[str, int] | None = None) -> d
         value = _extract_first_int(pattern, lowered)
         if value is not None:
             flow[key] = value
-    if "citation_review_records" not in flow:
-        cite_alt = _extract_first_int(r"citation[^\n]{0,80}\b([0-9][0-9,]*)\b", lowered)
-        if cite_alt is not None:
-            flow["citation_review_records"] = cite_alt
-    if "expert_records" not in flow:
-        expert_alt = _extract_first_int(r"expert[^\n]{0,80}\b([0-9][0-9,]*)\b", lowered)
-        if expert_alt is not None:
-            flow["expert_records"] = expert_alt
     title_abs_alt = _extract_first_int(r"title(?:\s*(?:and|&|/)\s*abstract)[^\n]{0,120}?\(n\s*=\s*([0-9][0-9,]*)\)", lowered)
     if title_abs_alt is not None:
         flow["excluded_title_abstract"] = title_abs_alt
@@ -341,6 +333,11 @@ def _extract_prisma_flow(text: str, existing: dict[str, int] | None = None) -> d
             flow["excluded_full_text"] = diff
     for key in ("excluded_title_abstract", "excluded_full_text", "screened", "full_text_review", "included", "database_records_total"):
         if int(flow.get(key, 0) or 0) < 50 and key in {"excluded_title_abstract", "excluded_full_text", "screened", "full_text_review", "included", "database_records_total"}:
+            flow.pop(key, None)
+    # Remove likely year artifacts accidentally parsed as counts.
+    for key in ("citation_review_records", "expert_records", "database_records_total", "records_identified_total"):
+        value = int(flow.get(key, 0) or 0)
+        if 1900 <= value <= 2100:
             flow.pop(key, None)
     return flow
 
@@ -424,6 +421,7 @@ def _extract_table_blocks(text: str) -> list[ExtractedTable]:
                 for part in parts:
                     token = re.sub(r"\s+", " ", part).strip(" -\t\r\n")
                     token = token.replace(".The ", ". The ")
+                    token = token.replace(".There ", ". There ")
                     sentence_parts = [s.strip() for s in re.split(r"\.\s+", token) if s.strip()]
                     if len(sentence_parts) > 1:
                         for sent in sentence_parts:

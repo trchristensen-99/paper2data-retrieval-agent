@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 
 
-DEFAULT_MODEL = os.getenv("P2D_DEFAULT_MODEL", "gpt-5-nano")
+DEFAULT_MODEL = os.getenv("P2D_DEFAULT_MODEL", "gpt-5-mini")
 
 
 def _model(name: str) -> str:

@@ -73,12 +73,36 @@ def _sanitize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
     method_benchmarks = payload.get("method_benchmarks")
     if not isinstance(method_benchmarks, list):
         method_benchmarks = []
-    tables_extracted = payload.get("tables_extracted")
-    if not isinstance(tables_extracted, list):
-        tables_extracted = []
-    key_figures = payload.get("key_figures")
-    if not isinstance(key_figures, list):
-        key_figures = []
+    tables_raw = payload.get("tables_extracted")
+    tables_extracted: list[dict[str, Any]] = []
+    if isinstance(tables_raw, list):
+        for idx, item in enumerate(tables_raw, start=1):
+            if isinstance(item, dict):
+                tables_extracted.append(item)
+            elif isinstance(item, str) and item.strip():
+                tables_extracted.append(
+                    {
+                        "table_id": f"Table {idx}",
+                        "title": item.strip(),
+                        "columns": [],
+                        "summary": None,
+                        "key_content": [],
+                    }
+                )
+    key_figures_raw = payload.get("key_figures")
+    key_figures: list[dict[str, Any]] = []
+    if isinstance(key_figures_raw, list):
+        for idx, item in enumerate(key_figures_raw, start=1):
+            if isinstance(item, dict):
+                key_figures.append(item)
+            elif isinstance(item, str) and item.strip():
+                key_figures.append(
+                    {
+                        "figure_id": f"Figure {idx}",
+                        "description": item.strip(),
+                        "key_findings": [],
+                    }
+                )
     paper_type = payload.get("paper_type")
     if not isinstance(paper_type, str) or not paper_type.strip():
         paper_type = None
