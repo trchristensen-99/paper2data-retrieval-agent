@@ -91,6 +91,30 @@ def _normalize_repo_name(accession: DataAccession) -> str:
     return accession.repository.strip().lower()
 
 
+def _norm_url_ocr(url: str | None) -> str | None:
+    if not url:
+        return url
+    fixed = url.strip()
+    fixed = re.sub(r"https?://(?:www\.)?fgshare\.com", "https://figshare.com", fixed, flags=re.IGNORECASE)
+    fixed = re.sub(r"\b10\.6084/m9\.fgshare\.", "10.6084/m9.figshare.", fixed, flags=re.IGNORECASE)
+    return fixed
+
+
+def _sanitize_reference_noise(resources: list[RelatedResource], paper_markdown: str) -> list[RelatedResource]:
+    out: list[RelatedResource] = []
+    main_doi_match = re.search(r"\b10\.\d{4,9}/[^\s)]+", paper_markdown, flags=re.IGNORECASE)
+    main_doi = main_doi_match.group(0).lower().rstrip(".,;") if main_doi_match else ""
+    for r in resources:
+        url = (r.url or "").strip()
+        low = url.lower()
+        if low and main_doi and main_doi in low:
+            continue
+        if "doi.org/" in low and "/s41597-" in low and "nature.com" in low:
+            continue
+        out.append(r)
+    return out
+
+
 def _infer_data_format(accession: DataAccession) -> str | None:
     candidates = []
     if accession.url:
@@ -185,7 +209,9 @@ def _extract_related_resources_from_text(paper_markdown: str) -> list[RelatedRes
     out: list[RelatedResource] = []
     seen: set[str] = set()
     for url in urls:
-        clean = url.strip().rstrip(".,;")
+        clean = _norm_url_ocr(url.strip().rstrip(".,;"))
+        if not clean:
+            continue
         key = clean.lower()
         if key in seen:
             continue
@@ -208,7 +234,9 @@ def _dedupe_related_resources(resources: list[RelatedResource]) -> list[RelatedR
     out: list[RelatedResource] = []
     seen: set[str] = set()
     for r in resources:
-        key = f"{(r.name or '').strip().lower()}::{(r.url or '').strip().lower()}"
+        if r.url:
+            r.url = _norm_url_ocr(r.url)
+        key = f"{(r.name or '').strip().lower()}::{(r.url or '').strip().lower()}::{(r.type or '').strip().lower()}"
         if key in seen:
             continue
         seen.add(key)
@@ -257,6 +285,8 @@ def _normalize_overall_status(value: str | None) -> str:
 async def _enrich_accession(accession: DataAccession) -> DataAccession:
     """Deterministically enrich repository accessions with live checks."""
     repo = _normalize_repo_name(accession)
+    accession.url = _norm_url_ocr(accession.url)
+    accession.accession_id = _norm_url_ocr(accession.accession_id) or accession.accession_id
     identifier = accession.url or accession.accession_id
 
     if accession.url:
@@ -277,7 +307,7 @@ async def _enrich_accession(accession: DataAccession) -> DataAccession:
                 speed = probe.get("bytes_per_second")
                 if isinstance(speed, (int, float)) and speed > 0:
                     accession.estimated_download_seconds = accession.total_size_bytes / float(speed)
-    elif "figshare" in repo:
+    elif "figshare" in repo or "fgshare" in repo:
         info = await check_figshare_record_request(identifier)
         if info.get("exists"):
             accession.is_accessible = True
@@ -321,6 +351,29 @@ async def _enrich_data_accessions(accessions: list[DataAccession]) -> list[DataA
     return enriched
 
 
+def _extract_figshare_file_mentions(paper_markdown: str) -> list[str]:
+    patterns = [
+        r"\bREADME(?:\.md)?\b",
+        r"\b[^ \n\t]+\.xlsx\b",
+        r"\b[^ \n\t]+\.csv\b",
+        r"\b[^ \n\t]+\.tsv\b",
+        r"\b[^ \n\t]+\.ipynb\b",
+        r"\b[^ \n\t]+\.py\b",
+        r"\b[^ \n\t]+\.md\b",
+    ]
+    found: list[str] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        for match in re.findall(pattern, paper_markdown, flags=re.IGNORECASE):
+            token = re.sub(r"[),.;]+$", "", str(match).strip())
+            key = token.lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            found.append(token)
+    return found[:80]
+
+
 def _extract_candidate_accessions_from_text(
     paper_markdown: str,
     paper_type: str | None,
@@ -330,13 +383,13 @@ def _extract_candidate_accessions_from_text(
         "zenodo": r"https?://[^\s)]+zenodo[^\s)]*",
         "geo": r"\bGSE[0-9]+\b",
         "sra": r"\bSRP[0-9]+\b|\bSRR[0-9]+\b",
-        "figshare_doi": r"\b10\.6084/m9\.fgshare\.[0-9]+\b",
+        "figshare_doi": r"\b10\.6084/m9\.figshare\.[0-9]+\b|\b10\.6084/m9\.fgshare\.[0-9]+\b",
     }
     found: list[DataAccession] = []
     category = "primary_dataset" if paper_type == "dataset_descriptor" else "supplementary_data"
     for repo, pattern in repo_patterns.items():
         for idx, match in enumerate(re.findall(pattern, paper_markdown, flags=re.IGNORECASE), start=1):
-            token = str(match).strip()
+            token = _norm_url_ocr(str(match).strip()) or str(match).strip()
             accession_id = token
             url = token if token.startswith("http") else None
             if repo == "figshare_doi" and not url:
@@ -438,19 +491,61 @@ async def run_data_availability_agent(
             output.data_availability.discrepancies.append(
                 "Recovered dataset-like accessions from paper text fallback parser."
             )
+    figshare_mentions = _extract_figshare_file_mentions(paper_markdown)
+    if figshare_mentions:
+        for accession in output.data_accessions:
+            repo_name = (accession.repository or "").lower()
+            if "figshare" in repo_name or "fgshare" in repo_name:
+                files = list(accession.files_listed or [])
+                seen = {x.lower() for x in files}
+                for mention in figshare_mentions:
+                    if mention.lower() in seen:
+                        continue
+                    files.append(mention)
+                    seen.add(mention.lower())
+                accession.files_listed = files[:120]
+                accession.file_count = max(accession.file_count or 0, len(accession.files_listed))
+                if accession.description and "zip" not in accession.description.lower():
+                    accession.description = f"{accession.description} Repository package may contain multiple files inside zip/archive."
     if not output.related_resources:
         output.related_resources = _extract_related_resources_from_text(paper_markdown)
     if related_from_filtered:
         output.related_resources.extend(related_from_filtered)
+    output.related_resources = _sanitize_reference_noise(output.related_resources, paper_markdown)
     output.related_resources = _dedupe_related_resources(output.related_resources)
-    output.data_availability.overall_status = _normalize_overall_status(output.data_availability.overall_status)
-    notes_text = (output.data_availability.notes or "").lower()
-    if any(k in notes_text for k in ("could not", "failed", "error", "timeout", "unverified")):
-        output.data_availability.check_status = "failed"
-    elif output.data_accessions and all(x.is_accessible is False for x in output.data_accessions):
-        output.data_availability.check_status = "partial"
+    claimed = sorted({(x.repository or "").strip() for x in output.data_accessions if (x.repository or "").strip()})
+    verified = sorted(
+        {
+            (x.repository or "").strip()
+            for x in output.data_accessions
+            if x.is_accessible is True and (x.repository or "").strip()
+        }
+    )
+    if claimed:
+        output.data_availability.claimed_repositories = claimed
+    output.data_availability.verified_repositories = verified
+
+    if output.data_accessions:
+        statuses = [x.is_accessible for x in output.data_accessions]
+        if all(s is True for s in statuses):
+            output.data_availability.overall_status = "accessible"
+            output.data_availability.check_status = "ok"
+        elif any(s is True for s in statuses):
+            output.data_availability.overall_status = "partially_accessible"
+            output.data_availability.check_status = "partial"
+        elif all(s is False for s in statuses):
+            output.data_availability.overall_status = "unavailable"
+            output.data_availability.check_status = "failed"
+        else:
+            output.data_availability.overall_status = _normalize_overall_status(output.data_availability.overall_status)
+            output.data_availability.check_status = "partial"
     else:
-        output.data_availability.check_status = "ok"
+        output.data_availability.overall_status = _normalize_overall_status(output.data_availability.overall_status)
+        notes_text = (output.data_availability.notes or "").lower()
+        if any(k in notes_text for k in ("could not", "failed", "error", "timeout", "unverified")):
+            output.data_availability.check_status = "failed"
+        else:
+            output.data_availability.check_status = "ok"
     if dropped:
         output.data_availability.discrepancies.append(
             f"Filtered {dropped} external reference links from data_accessions."

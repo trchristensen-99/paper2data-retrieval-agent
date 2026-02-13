@@ -174,3 +174,118 @@ async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) 
     artifacts = await manager.run_pipeline("paper body")
     assert artifacts.record.metadata.title == "Demo Paper"
     assert 0.0 <= artifacts.record.extraction_confidence <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_dataset_descriptor_backfills_profile_and_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    paper = """
+    # Responsible AI Measures Dataset
+    Published online: 20 December 2025
+    The dataset contains 791 measures and 12,067 data points in 16 columns.
+    Publication years range from 2011-2023 with 257 papers included.
+    Data are available at https://www.fgshare.com/articles/dataset/example/29551001
+    Repository includes README.md, dataset.xlsx, processing_notebook.ipynb, visualize.py, Sunburst_Visualization_Link.md
+    """
+
+    async def _metadata(_: str, guidance: str | None = None) -> MetadataRecord:
+        return MetadataRecord(
+            title="Responsible AI Measures Dataset",
+            authors=["A. Author"],
+            paper_type="dataset_descriptor",
+            publication_date="2025",
+            journal="Nature Scientific Data",
+        )
+
+    async def _anatomy(_: str) -> PaperAnatomyOutput:
+        return PaperAnatomyOutput(notes="ok")
+
+    async def _methods(_: str, guidance: str | None = None) -> MethodsSummary:
+        return MethodsSummary(
+            organisms=[],
+            cell_types=[],
+            assay_types=["scoping_review"],
+            sample_sizes={},
+            statistical_tests=[],
+            experimental_design="scoping review",
+            methods_completeness="sufficient",
+        )
+
+    async def _results(_: str, paper_type: str | None = None, guidance: str | None = None) -> ResultsSummary:
+        return ResultsSummary(paper_type=paper_type, dataset_properties=[], dataset_profile=None)
+
+    async def _data(_: str, paper_type: str | None = None, guidance: str | None = None):
+        class _Out:
+            data_accessions = [
+                DataAccession(
+                    accession_id="10.6084/m9.fgshare.29551001",
+                    category="primary_dataset",
+                    repository="Figshare",
+                    url="https://www.fgshare.com/articles/dataset/example/29551001",
+                    description="dataset",
+                    is_accessible=True,
+                )
+            ]
+            related_resources = []
+            data_availability = DataAvailabilityReport(
+                overall_status="accessible",
+                claimed_repositories=["Figshare"],
+                verified_repositories=["Figshare"],
+                discrepancies=[],
+                notes="ok",
+                check_status="ok",
+            )
+
+        return _Out()
+
+    async def _synthesis(payload):
+        record = PaperRecord(
+            metadata=payload.metadata,
+            methods=payload.methods,
+            results=payload.results,
+            data_accessions=payload.data_accessions,
+            data_availability=payload.data_availability,
+            code_repositories=payload.code_repositories,
+            extraction_timestamp="2026-02-12T00:00:00",
+            extraction_confidence=0.5,
+        )
+        return SynthesisOutput(
+            record=record,
+            retrieval_report_markdown="# Retrieval Report",
+            retrieval_log_markdown="# Retrieval Log",
+        )
+
+    class _Enrich:
+        doi = None
+        pmid = None
+        journal = None
+        publication_date = None
+        notes = "No enrichment needed"
+
+    async def _enrichment(*args, **kwargs):
+        return _Enrich()
+
+    class _QC:
+        should_retry = False
+        retry_instructions = []
+        missing_fields = []
+        suspicious_empty_fields = []
+        notes = "No issues detected"
+
+    async def _quality(*args, **kwargs):
+        return _QC()
+
+    monkeypatch.setattr(manager, "run_metadata_agent", _metadata)
+    monkeypatch.setattr(manager, "run_anatomy_agent", _anatomy)
+    monkeypatch.setattr(manager, "run_methods_agent", _methods)
+    monkeypatch.setattr(manager, "run_results_agent", _results)
+    monkeypatch.setattr(manager, "run_data_availability_agent", _data)
+    monkeypatch.setattr(manager, "run_quality_control_agent", _quality)
+    monkeypatch.setattr(manager, "run_metadata_enrichment_agent", _enrichment)
+    monkeypatch.setattr(manager, "run_synthesis_agent", _synthesis)
+
+    artifacts = await manager.run_pipeline(paper)
+    assert artifacts.record.results.dataset_profile is not None
+    assert artifacts.record.results.dataset_profile.record_count == 791
+    assert artifacts.record.metadata.publication_date == "2025-12-20"
+    assert any("figshare.com" in (a.url or "") for a in artifacts.record.data_accessions)
+    assert artifacts.record.code_repositories

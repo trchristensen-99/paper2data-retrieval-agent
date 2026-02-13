@@ -147,8 +147,10 @@ HTML_PAGE = """<!doctype html>
 
     function valueToText(value) {
       if (value === null || value === undefined) return '';
-      if (Array.isArray(value)) return value.map(v => valueToText(v)).filter(Boolean).join('; ');
-      if (typeof value === 'object') return JSON.stringify(value);
+      if (Array.isArray(value)) return value.map(v => valueToText(v)).filter(Boolean).join(', ');
+      if (typeof value === 'object') {
+        return Object.entries(value).map(([k, v]) => `${k}: ${valueToText(v)}`).join(', ');
+      }
       return String(value);
     }
 
@@ -174,6 +176,7 @@ HTML_PAGE = """<!doctype html>
           ['Field', metadata.category || ''],
           ['Subfield', metadata.subcategory || ''],
           ['Confidence', Number(record.extraction_confidence || 0).toFixed(2)],
+          ['Confidence Breakdown', valueToText(record.extraction_confidence_breakdown || {})],
         ],
         metadata: [
           ['Keywords', valueToText(metadata.keywords || [])],
@@ -326,6 +329,7 @@ HTML_PAGE = """<!doctype html>
         ['Source Corpus Size', p.source_corpus_size], ['Dimensions', valueToText(p.dimensions || {})],
         ['Version', p.version], ['License', p.license], ['Repository Contents', valueToText(p.repository_contents || [])],
         ['PRISMA Flow', valueToText(p.prisma_flow || {})], ['Processing Pipeline', p.processing_pipeline_summary],
+        ['Column Schema', valueToText((p.column_schema || []).map(c => c.name || ''))],
       ];
       return renderDetailTable(rows);
     }
@@ -335,19 +339,20 @@ HTML_PAGE = """<!doctype html>
       const q = detailFilter.trim().toLowerCase();
       const filtered = rows.filter(t => {
         if (!q) return true;
-        return [t.table_id, t.title, valueToText(t.columns || []), t.summary].map(valueToText).join(' ').toLowerCase().includes(q);
+        return [t.table_id, t.title, valueToText(t.columns || []), t.summary, valueToText(t.key_content || [])].map(valueToText).join(' ').toLowerCase().includes(q);
       });
       if (!filtered.length) return '<div class=\"muted\">No matching extracted tables.</div>';
       return `
         <div class=\"subtable-wrap\">
           <table class=\"subtable\">
-            <thead><tr><th>#</th><th>Table</th><th>Title</th><th>Columns</th><th>Summary</th></tr></thead>
+            <thead><tr><th>#</th><th>Table</th><th>Title</th><th>Columns</th><th>Summary</th><th>Key Content</th></tr></thead>
             <tbody>
               ${filtered.map((t, i) => `<tr>
                 <td>${i + 1}</td><td>${escapeHtml(valueToText(t.table_id))}</td>
                 <td>${escapeHtml(valueToText(t.title))}</td>
                 <td>${escapeHtml(valueToText(t.columns))}</td>
                 <td>${escapeHtml(valueToText(t.summary))}</td>
+                <td>${escapeHtml(valueToText(t.key_content || []))}</td>
               </tr>`).join('')}
             </tbody>
           </table>
