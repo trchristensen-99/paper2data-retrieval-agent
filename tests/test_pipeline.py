@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from src.agents import manager
+from src.agents.data_availability import _enrich_accession
 from src.schemas.models import (
     DataAccession,
     DataAvailabilityReport,
@@ -290,3 +291,45 @@ async def test_dataset_descriptor_backfills_profile_and_code(monkeypatch: pytest
     assert any("figshare.com" in (a.url or "") for a in artifacts.record.data_accessions)
     assert artifacts.record.code_available is True
     assert artifacts.record.archival_repositories
+    assert artifacts.record.methods.experimental_design_steps
+    assert artifacts.record.methods.assay_type_mappings
+    assert artifacts.record.results.experimental_findings
+
+
+def test_table_block_extraction_includes_rows() -> None:
+    text = """
+    <table>
+      <tr><th>Variable</th><th>Description</th></tr>
+      <tr><td>Measure</td><td>The name of the measure</td></tr>
+      <tr><td>Principle</td><td>Ethical principle</td></tr>
+    </table>
+    """
+    tables = manager._extract_table_blocks(text)
+    assert tables
+    assert tables[0].columns == ["Variable", "Description"]
+    assert tables[0].data
+    assert tables[0].data[0]["Variable"] == "Measure"
+    assert tables[0].provenance is not None
+
+
+@pytest.mark.asyncio
+async def test_enrich_accession_repairs_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _check_url(url: str):
+        if "fle=" in url:
+            return {"is_accessible": False, "status_code": 404}
+        if "file=" in url:
+            return {"is_accessible": True, "status_code": 200}
+        return {"is_accessible": False, "status_code": 404}
+
+    monkeypatch.setattr("src.agents.data_availability.check_url_request", _check_url)
+    accession = DataAccession(
+        accession_id="A1",
+        repository="Figshare",
+        category="primary_dataset",
+        url="https://figshare.com/articles/dataset/example/29551001?fle=57701437",
+        description="test",
+    )
+    out = await _enrich_accession(accession)
+    assert out.is_accessible is True
+    assert out.url_repaired is True
+    assert "file=57701437" in (out.url or "")

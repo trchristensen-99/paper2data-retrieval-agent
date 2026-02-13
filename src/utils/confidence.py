@@ -105,6 +105,7 @@ def compute_extraction_confidence(
 
     methods_checks = [
         bool(methods.experimental_design.strip()),
+        bool(methods.experimental_design_steps),
         bool(methods.assay_types),
         bool(methods.sample_sizes),
         bool(methods.statistical_tests),
@@ -123,6 +124,7 @@ def compute_extraction_confidence(
                     bool(f.value.strip()),
                     bool(f.context.strip()),
                     bool((f.effect_size or "").strip() or (f.confidence_interval or "").strip()),
+                    bool(f.provenance and (f.provenance.text_segment or f.provenance.line_start)),
                 ]
                 finding_scores.append(sum(1.0 for ok in checks if ok) / len(checks))
             results_quality = _clamp(sum(finding_scores) / len(finding_scores))
@@ -160,6 +162,10 @@ def compute_extraction_confidence(
                     dirty_entity_hits += 1
             if dirty_entity_hits > 0:
                 results_quality = _clamp(results_quality - min(0.25, 0.08 * dirty_entity_hits))
+            if results.tables_extracted:
+                table_data_cov = sum(1 for t in results.tables_extracted if t.data) / max(len(results.tables_extracted), 1)
+                if table_data_cov < 0.6:
+                    results_quality = _clamp(results_quality - (0.2 * (0.6 - table_data_cov)))
             flow = profile.prisma_flow
             compact = flow.as_compact_dict() if isinstance(flow, PrismaFlow) else {}
             if compact:

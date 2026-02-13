@@ -13,9 +13,11 @@ from src.utils.retry import run_with_rate_limit_retry
 
 METHODS_PROMPT = """Extract methods details needed for statistical assessment:
 - organisms, cell types, assay types
+- assay_type_mappings using normalized ontology-style terms where possible
 - sample sizes
 - statistical tests used
 - concise but faithful experimental design summary
+- experimental_design_steps as chronological atomic steps
 - methods completeness assessment for reproducibility
 
 Do not speculate. Mark missing details explicitly in summary text.
@@ -94,6 +96,8 @@ def _sanitize_methods_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "sample_sizes": _coerce_sample_sizes(payload.get("sample_sizes")),
         "statistical_tests": _coerce_list(payload.get("statistical_tests")),
         "experimental_design": _coerce_scalar(payload.get("experimental_design")),
+        "experimental_design_steps": payload.get("experimental_design_steps") or [],
+        "assay_type_mappings": payload.get("assay_type_mappings") or [],
         "methods_completeness": _coerce_scalar(payload.get("methods_completeness")),
     }
 
@@ -118,7 +122,7 @@ async def run_methods_agent(paper_markdown: str, guidance: str | None = None) ->
             "[FORMAT_FIX]\n"
             "Return JSON object with keys exactly:\n"
             "organisms, cell_types, assay_types, sample_sizes, statistical_tests, "
-            "experimental_design, methods_completeness.\n"
+            "experimental_design, experimental_design_steps, assay_type_mappings, methods_completeness.\n"
             "Values must be raw data, not schema metadata.\n"
         )
         repair_result = await run_with_rate_limit_retry(

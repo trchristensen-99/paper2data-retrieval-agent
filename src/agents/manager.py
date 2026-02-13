@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,13 +26,17 @@ from src.agents.quality_control import quality_control_agent, run_quality_contro
 from src.agents.results import results_agent, run_results_agent
 from src.agents.synthesis import fallback_synthesis, run_synthesis_agent, synthesis_agent
 from src.schemas.models import (
+    AssayTypeMapping,
     DataAccession,
     DataAvailabilityReport,
     DatasetColumn,
     DatasetProfile,
     DescriptiveStat,
+    ExperimentalDesignStep,
     ExtractedTable,
+    ExperimentalFinding,
     PrismaFlow,
+    Provenance,
     PaperRecord,
     RelatedResource,
     SynthesisInput,
@@ -277,6 +282,191 @@ def _extract_first_int(pattern: str, text: str, flags: int = re.IGNORECASE) -> i
     return int(re.sub(r"[^0-9]", "", match.group(1)))
 
 
+def _locate_provenance(text: str, needle: str, *, source_table: str | None = None) -> Provenance | None:
+    token = (needle or "").strip()
+    if not token:
+        return None
+    token_low = token.lower()
+    lines = text.splitlines()
+    for idx, line in enumerate(lines, start=1):
+        if token_low in line.lower():
+            return Provenance(
+                source_section=None,
+                source_table=source_table,
+                line_start=idx,
+                line_end=idx,
+                text_segment=line.strip()[:300],
+            )
+    return None
+
+
+def _infer_domain_profile(category: str | None, paper_type: str | None, paper_markdown: str) -> str:
+    c = (category or "").strip().lower()
+    p = (paper_type or "").strip().lower()
+    text = paper_markdown.lower()
+    if c in {"biology", "medicine_health", "environmental_science", "climate_science"}:
+        return "bio"
+    if p in {"dataset_descriptor", "review", "meta_analysis"}:
+        return "meta_research"
+    if c in {"data_science_ai", "computer_science", "mathematics_statistics"}:
+        return "computational"
+    if any(k in text for k in ("rna-seq", "chip-seq", "single-cell", "mouse", "homo sapiens")):
+        return "bio"
+    return "general"
+
+
+def _assay_mapping_for(raw_value: str) -> AssayTypeMapping:
+    raw = re.sub(r"\s+", " ", raw_value.strip())
+    low = raw.lower()
+    mapping = [
+        ("rna-seq", "RNA_SEQ", "OBI:0001271"),
+        ("chip-seq", "CHIP_SEQ", "OBI:0000716"),
+        ("atac-seq", "ATAC_SEQ", "OBI:0002039"),
+        ("mpra", "MPRA", "OBI:0002675"),
+        ("scoping review", "SCOPING_REVIEW", "NCIT:C17649"),
+        ("systematic review", "SYSTEMATIC_REVIEW", "NCIT:C40514"),
+        ("meta-analysis", "META_ANALYSIS", "NCIT:C53326"),
+        ("statistical", "STATISTICAL_ANALYSIS", "NCIT:C25656"),
+        ("benchmark", "BENCHMARK_EVALUATION", "NCIT:C142678"),
+    ]
+    for needle, mapped, ont in mapping:
+        if needle in low:
+            return AssayTypeMapping(raw=raw, mapped_term=mapped, ontology_id=ont)
+    mapped = re.sub(r"[^a-z0-9]+", "_", low).strip("_").upper() or "OTHER_ANALYSIS"
+    return AssayTypeMapping(raw=raw, mapped_term=mapped, ontology_id=None)
+
+
+def _extract_experimental_design_steps(
+    paper_markdown: str,
+    methods_summary: str,
+    prisma_flow: PrismaFlow | None,
+) -> list[ExperimentalDesignStep]:
+    steps: list[ExperimentalDesignStep] = []
+    flow = prisma_flow.as_compact_dict() if isinstance(prisma_flow, PrismaFlow) else {}
+    db_total = flow.get("database_records_total")
+    if db_total:
+        step = ExperimentalDesignStep(
+            step=1,
+            action="Database search",
+            tools=["ACM", "IEEE", "Web of Science"],
+            count=int(db_total),
+            context="Initial identification from indexed databases.",
+            provenance=_locate_provenance(paper_markdown, "records from", source_table=None),
+        )
+        steps.append(step)
+    screened = flow.get("screened") or flow.get("records_after_duplicate_removal")
+    if screened:
+        steps.append(
+            ExperimentalDesignStep(
+                step=len(steps) + 1,
+                action="Screening",
+                tools=["Covidence"] if "covidence" in paper_markdown.lower() else [],
+                criteria="Title/Abstract" if "title" in paper_markdown.lower() and "abstract" in paper_markdown.lower() else None,
+                count=int(screened),
+                excluded=flow.get("excluded_title_abstract"),
+                context="Primary screening phase.",
+                provenance=_locate_provenance(paper_markdown, "screened", source_table=None),
+            )
+        )
+    full_text = flow.get("full_text_review")
+    if full_text:
+        steps.append(
+            ExperimentalDesignStep(
+                step=len(steps) + 1,
+                action="Eligibility review",
+                criteria="Full text",
+                count=int(full_text),
+                excluded=flow.get("excluded_full_text"),
+                context="Full-text eligibility assessment.",
+                provenance=_locate_provenance(paper_markdown, "full-text", source_table=None),
+            )
+        )
+    included = flow.get("included")
+    if included:
+        steps.append(
+            ExperimentalDesignStep(
+                step=len(steps) + 1,
+                action="Inclusion",
+                included=int(included),
+                context="Final included studies/data sources.",
+                provenance=_locate_provenance(paper_markdown, "included", source_table=None),
+            )
+        )
+    if not steps and methods_summary.strip():
+        steps.append(
+            ExperimentalDesignStep(
+                step=1,
+                action="Method summary",
+                context=methods_summary[:280],
+                provenance=_locate_provenance(paper_markdown, methods_summary[:40], source_table=None),
+            )
+        )
+    return steps
+
+
+def _extract_quantitative_findings_from_text(
+    paper_markdown: str,
+    existing: list[ExperimentalFinding],
+) -> list[ExperimentalFinding]:
+    if existing:
+        return existing
+    text = paper_markdown
+    patterns = [
+        (r"fairness\s*\(?\s*([0-9]+(?:\.[0-9]+)?)%\s*\)?", "Principle share: fairness", "principle_share"),
+        (r"transparency\s*\(?\s*([0-9]+(?:\.[0-9]+)?)%\s*\)?", "Principle share: transparency", "principle_share"),
+        (r"privacy\s*\(?\s*([0-9]+(?:\.[0-9]+)?)%\s*\)?", "Principle share: privacy", "principle_share"),
+        (r"trust\s*\(?\s*([0-9]+(?:\.[0-9]+)?)%\s*\)?", "Principle share: trust", "principle_share"),
+    ]
+    out: list[ExperimentalFinding] = []
+    for pattern, claim, metric in patterns:
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if not m:
+            continue
+        value = m.group(1)
+        prov = _locate_provenance(text, m.group(0))
+        out.append(
+            ExperimentalFinding(
+                claim=claim,
+                metric=metric,
+                value=value,
+                unit="percent",
+                statistical_significance=None,
+                effect_size=None,
+                confidence_interval=None,
+                comparison=None,
+                context="Distributional summary reported in paper text/figures.",
+                confidence=0.82,
+                provenance=prov,
+            )
+        )
+    return out
+
+
+def _derive_findings_from_dataset_properties(
+    dataset_properties: list[DescriptiveStat],
+) -> list[ExperimentalFinding]:
+    out: list[ExperimentalFinding] = []
+    for prop in dataset_properties:
+        if not re.search(r"[0-9]", prop.value):
+            continue
+        out.append(
+            ExperimentalFinding(
+                claim=f"{prop.property} = {prop.value}",
+                metric=prop.variable or prop.property,
+                value=prop.value,
+                unit=prop.unit,
+                statistical_significance=prop.statistical_significance,
+                effect_size=None,
+                confidence_interval=None,
+                comparison=None,
+                context=prop.context,
+                confidence=max(0.6, min(0.95, prop.confidence)),
+                provenance=prop.provenance,
+            )
+        )
+    return out[:25]
+
+
 def _extract_prisma_flow(text: str, existing: dict[str, int] | None = None) -> dict[str, int]:
     flow: dict[str, int] = dict(existing or {})
     alias_map = {
@@ -393,6 +583,75 @@ def _extract_figshare_file_url(paper_markdown: str) -> str | None:
     return normed
 
 
+def _strict_file_list_enabled() -> bool:
+    raw = (os.getenv("P2D_STRICT_FILE_LIST") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _normalize_file_entries(values: list[str]) -> list[str]:
+    allowed_ext = ("xlsx", "csv", "tsv", "ipynb", "py", "md", "txt", "json", "zip", "pdf")
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        token = html.unescape(str(raw or "")).strip()
+        if not token:
+            continue
+        token = re.sub(r"\s+", " ", token)
+        file_match = re.search(r"\b([A-Za-z0-9_.-]+\.(?:xlsx|csv|tsv|ipynb|py|md|txt|json|zip|pdf))\b", token, flags=re.IGNORECASE)
+        normalized: str | None = None
+        if file_match:
+            normalized = file_match.group(1)
+        elif token.lower().startswith("readme"):
+            normalized = "README.md"
+        elif _strict_file_list_enabled():
+            normalized = None
+        else:
+            # Keep compact basename-like tokens in non-strict mode.
+            simple = re.sub(r"[^A-Za-z0-9_.-]", "", token)
+            if simple and "." in simple:
+                ext = simple.rsplit(".", 1)[-1].lower()
+                if ext in allowed_ext:
+                    normalized = simple
+        if not normalized:
+            continue
+        if normalized.lower() == "readme":
+            normalized = "README.md"
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(normalized)
+    return out
+
+
+def _extract_figshare_ids(accession: DataAccession) -> tuple[str | None, str | None]:
+    article_id: str | None = None
+    file_id: str | None = None
+    combined = " ".join(
+        [
+            accession.accession_id or "",
+            accession.url or "",
+            accession.download_probe_url or "",
+            " ".join(accession.files_listed or []),
+        ]
+    )
+    m_article = re.search(r"\b10\.6084/m9\.figshare\.([0-9]+)\b", combined, flags=re.IGNORECASE)
+    if m_article:
+        article_id = m_article.group(1)
+    if not article_id:
+        m_article = re.search(r"/articles?/[^/]+/([0-9]+)", combined, flags=re.IGNORECASE)
+        if m_article:
+            article_id = m_article.group(1)
+    m_file = re.search(r"[?&]file=([0-9]+)", combined, flags=re.IGNORECASE)
+    if m_file:
+        file_id = m_file.group(1)
+    if not file_id:
+        m_file = re.search(r"/files/([0-9]+)", combined, flags=re.IGNORECASE)
+        if m_file:
+            file_id = m_file.group(1)
+    return article_id, file_id
+
+
 def _extract_table_blocks(text: str) -> list[ExtractedTable]:
     blocks = re.findall(r"<table>(.*?)</table>", text, flags=re.IGNORECASE | re.DOTALL)
     extracted: list[ExtractedTable] = []
@@ -411,6 +670,15 @@ def _extract_table_blocks(text: str) -> list[ExtractedTable]:
         if not parsed_rows:
             continue
         columns = parsed_rows[0][:20]
+        row_dicts: list[dict[str, str]] = []
+        for row in parsed_rows[1:]:
+            normalized_row = row + [""] * max(0, len(columns) - len(row))
+            row_obj: dict[str, str] = {}
+            for idx, col in enumerate(columns):
+                key = re.sub(r"\s+", " ", col).strip() or f"col_{idx+1}"
+                row_obj[key] = normalized_row[idx].strip() if idx < len(normalized_row) else ""
+            if any(v for v in row_obj.values()):
+                row_dicts.append(row_obj)
         key_content: list[str] = []
         seen: set[str] = set()
         for row in parsed_rows[1:]:
@@ -464,13 +732,18 @@ def _extract_table_blocks(text: str) -> list[ExtractedTable]:
                         break
             if len(key_content) >= 40:
                 break
+        table_prov = _locate_provenance(text, f"table {i}", source_table=f"Table {i}") or _locate_provenance(
+            text, "<table>", source_table=f"Table {i}"
+        )
         extracted.append(
             ExtractedTable(
                 table_id=f"Table {i}",
                 title=f"Extracted table {i}",
                 columns=columns,
+                data=row_dicts[:400],
                 summary=f"Parsed {len(parsed_rows)} rows from table {i}.",
                 key_content=key_content,
+                provenance=table_prov,
             )
         )
     return extracted
@@ -624,28 +897,28 @@ def _extract_dataset_profile_from_text(
             profile.processing_pipeline_summary = re.sub(r"\s+", " ", summary_match.group(1)).strip()[:600]
 
     known_columns = [
-        "Measure",
-        "Measurement Process",
-        "Principle",
-        "Part of the ML System",
-        "Primary Harm",
-        "Secondary Harm",
-        "Criterion Name",
-        "Criterion Description",
-        "Type of Assessment",
-        "Application Area",
-        "Purpose of ML System",
-        "Type of Data",
-        "Algorithm Type",
-        "Title",
-        "Publication Year",
-        "DOI Link",
+        ("Measure", "Dataset details", "Name/identifier of a measure."),
+        ("Measurement Process", "Dataset details", "How the measure was operationalized."),
+        ("Principle", "Ethical principle", "Responsible AI principle targeted by the measure."),
+        ("Part of the ML System", "System component", "ML lifecycle/system component assessed."),
+        ("Primary Harm", "Harm taxonomy", "Primary harm category addressed."),
+        ("Secondary Harm", "Harm taxonomy", "Secondary harm category addressed."),
+        ("Criterion Name", "Assessment details", "Criterion title for evaluation."),
+        ("Criterion Description", "Assessment details", "Description of the evaluation criterion."),
+        ("Type of Assessment", "Assessment details", "Assessment modality/type."),
+        ("Application Area", "Paper metadata", "Application domain of the ML system."),
+        ("Purpose of ML System", "Paper metadata", "Purpose/task of the ML system."),
+        ("Type of Data", "Paper metadata", "Data modality used by the ML system."),
+        ("Algorithm Type", "Paper metadata", "Model/algorithm family."),
+        ("Title", "Paper metadata", "Source paper title."),
+        ("Publication Year", "Paper metadata", "Year of source paper publication."),
+        ("DOI Link", "Paper metadata", "DOI URL/identifier for source paper."),
     ]
     col_schema = list(profile.column_schema or [])
     existing_names = {c.name.lower() for c in col_schema}
-    for name in known_columns:
+    for name, category, description in known_columns:
         if name.lower() in lowered and name.lower() not in existing_names:
-            col_schema.append(DatasetColumn(name=name))
+            col_schema.append(DatasetColumn(name=name, category=category, description=description))
     profile.column_schema = col_schema
     if profile.columns is None and profile.column_schema:
         profile.columns = len(profile.column_schema)
@@ -680,27 +953,98 @@ def _backfill_dataset_results(
         anatomy_prisma_flow=anatomy.prisma_flow,
     )
     if profile:
+        cleaned_schema: list[DatasetColumn] = []
+        seen_schema: set[str] = set()
+        for col in profile.column_schema or []:
+            name = re.sub(r"\s+", " ", (col.name or "").strip())
+            if not name:
+                continue
+            key = name.lower()
+            if key in seen_schema:
+                continue
+            if (col.description is None or not str(col.description).strip()) and (
+                col.category is None or not str(col.category).strip()
+            ):
+                continue
+            seen_schema.add(key)
+            cleaned_schema.append(
+                DatasetColumn(
+                    name=name,
+                    category=(col.category or None),
+                    description=(col.description or None),
+                )
+            )
+        if cleaned_schema:
+            profile.column_schema = cleaned_schema
         results.dataset_profile = profile
     if not results.dataset_properties and results.dataset_profile:
         p = results.dataset_profile
         props: list[DescriptiveStat] = []
         if p.record_count is not None:
-            props.append(DescriptiveStat(property="record_count", value=str(p.record_count), context="Dataset size"))
+            props.append(
+                DescriptiveStat(
+                    property="record_count",
+                    variable="record_count",
+                    value=str(p.record_count),
+                    context="Dataset size",
+                    confidence=0.9,
+                    provenance=_locate_provenance(paper_markdown, "measures"),
+                )
+            )
         if p.data_point_count is not None:
-            props.append(DescriptiveStat(property="data_point_count", value=str(p.data_point_count), context="Total extracted datapoints"))
+            props.append(
+                DescriptiveStat(
+                    property="data_point_count",
+                    variable="data_point_count",
+                    value=str(p.data_point_count),
+                    context="Total extracted datapoints",
+                    confidence=0.9,
+                    provenance=_locate_provenance(paper_markdown, "data points"),
+                )
+            )
         if p.columns is not None:
-            props.append(DescriptiveStat(property="columns", value=str(p.columns), context="Dataset schema width"))
+            props.append(
+                DescriptiveStat(
+                    property="columns",
+                    variable="columns",
+                    value=str(p.columns),
+                    context="Dataset schema width",
+                    confidence=0.88,
+                    provenance=_locate_provenance(paper_markdown, "columns"),
+                )
+            )
         if p.temporal_coverage:
-            props.append(DescriptiveStat(property="temporal_coverage", value=p.temporal_coverage, context="Time span covered"))
+            props.append(
+                DescriptiveStat(
+                    property="temporal_coverage",
+                    variable="temporal_coverage",
+                    value=p.temporal_coverage,
+                    context="Time span covered",
+                    confidence=0.85,
+                    provenance=_locate_provenance(paper_markdown, p.temporal_coverage),
+                )
+            )
         if p.source_corpus_size is not None:
-            props.append(DescriptiveStat(property="source_corpus_size", value=str(p.source_corpus_size), context="Source papers included"))
+            props.append(
+                DescriptiveStat(
+                    property="source_corpus_size",
+                    variable="source_corpus_size",
+                    value=str(p.source_corpus_size),
+                    context="Source papers included",
+                    confidence=0.88,
+                    provenance=_locate_provenance(paper_markdown, "included"),
+                )
+            )
         p_flow = p.prisma_flow.as_compact_dict() if isinstance(p.prisma_flow, PrismaFlow) else (p.prisma_flow or {})
         if p_flow:
             props.append(
                 DescriptiveStat(
                     property="prisma_flow",
+                    variable="prisma_flow",
                     value=", ".join([f"{k}:{v}" for k, v in sorted(p_flow.items())]),
                     context="Study selection flow counts",
+                    confidence=0.86,
+                    provenance=_locate_provenance(paper_markdown, "PRISMA"),
                 )
             )
         results.dataset_properties = props
@@ -720,6 +1064,8 @@ def _backfill_dataset_results(
                     existing.key_content = parsed.key_content
                 if not existing.columns and parsed.columns:
                     existing.columns = parsed.columns
+                if not existing.data and parsed.data:
+                    existing.data = parsed.data
 
 
 def _derive_code_repositories(
@@ -801,6 +1147,29 @@ def _clean_placeholder_list(values: list[str], *, drop_journal: str | None = Non
     return out
 
 
+def _normalize_methods_for_domain(methods, domain_profile: str) -> None:
+    if domain_profile != "bio":
+        methods.organisms = []
+        methods.cell_types = []
+    if domain_profile == "meta_research":
+        cleaned: list[str] = []
+        for assay in methods.assay_types:
+            low = assay.lower()
+            if any(k in low for k in ("scoping review", "systematic review", "meta-analysis", "statistical")):
+                cleaned.append(assay)
+        methods.assay_types = cleaned or methods.assay_types
+    mapped: list[AssayTypeMapping] = []
+    seen: set[str] = set()
+    for assay in methods.assay_types:
+        m = _assay_mapping_for(assay)
+        key = f"{m.raw.lower()}::{m.mapped_term.lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        mapped.append(m)
+    methods.assay_type_mappings = mapped
+
+
 def _derive_keywords_from_text(paper_markdown: str, metadata_title: str) -> list[str]:
     text = f"{metadata_title}\n{paper_markdown}".lower()
     vocab = [
@@ -821,6 +1190,24 @@ def _derive_keywords_from_text(paper_markdown: str, metadata_title: str) -> list
         if term in text:
             out.append(term)
     return out[:10]
+
+
+def _attach_provenance_defaults(paper_markdown: str, methods, results) -> None:
+    for idx, step in enumerate(methods.experimental_design_steps, start=1):
+        if step.provenance is None:
+            seed = step.action or step.context or f"step {idx}"
+            step.provenance = _locate_provenance(paper_markdown, seed)
+    for finding in results.experimental_findings:
+        if finding.provenance is None:
+            seed = finding.value or finding.claim
+            finding.provenance = _locate_provenance(paper_markdown, seed)
+    for prop in results.dataset_properties:
+        if prop.provenance is None:
+            seed = prop.value or prop.property
+            prop.provenance = _locate_provenance(paper_markdown, seed)
+    for table in results.tables_extracted:
+        if table.provenance is None:
+            table.provenance = _locate_provenance(paper_markdown, table.table_id, source_table=table.table_id)
 
 
 def _keywords_need_repair(values: list[str]) -> bool:
@@ -913,6 +1300,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     )
     if _is_blank(metadata.paper_type):
         metadata.paper_type = _infer_paper_type(metadata.title, paper_markdown)
+    domain_profile = _infer_domain_profile(metadata.category, metadata.paper_type, paper_markdown)
     metadata.journal = _normalize_venue_name(metadata.journal)
     metadata.license = _normalize_license_to_spdx(metadata.license)
     step_timings_seconds["metadata"] = perf_counter() - step_start
@@ -920,7 +1308,12 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     _print_step_timing("metadata", step_timings_seconds["metadata"])
 
     step_start = perf_counter()
-    methods = await run_methods_agent(paper_markdown, guidance=anatomy_guidance)
+    methods_guidance = (
+        f"{anatomy_guidance}\n"
+        f"Domain profile: {domain_profile}\n"
+        "Return atomic experimental_design_steps; avoid domain-mismatched placeholders."
+    )
+    methods = await run_methods_agent(paper_markdown, guidance=methods_guidance)
     step_timings_seconds["methods"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "methods", "seconds": step_timings_seconds["methods"]})
     _print_step_timing("methods", step_timings_seconds["methods"])
@@ -929,6 +1322,10 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     results_guidance = (
         f"{anatomy_guidance}\n"
         f"PRISMA candidates: {anatomy.prisma_flow}\n"
+        "Sub-extraction mode:\n"
+        "- TableExtractor: return tables_extracted with row-level data\n"
+        "- TextClaimExtractor: capture numeric claims with values and units\n"
+        "- Reconciliation: prefer values corroborated by table/text overlap\n"
     )
     results = await run_results_agent(
         paper_markdown,
@@ -943,6 +1340,23 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         paper_markdown=paper_markdown,
         anatomy=anatomy,
     )
+    if not results.experimental_findings:
+        results.experimental_findings = _extract_quantitative_findings_from_text(
+            paper_markdown,
+            existing=results.experimental_findings,
+        )
+    if not results.experimental_findings and results.dataset_properties:
+        results.experimental_findings = _derive_findings_from_dataset_properties(
+            results.dataset_properties
+        )
+    prisma_for_steps = results.dataset_profile.prisma_flow if results.dataset_profile else _prisma_model(anatomy.prisma_flow)
+    if not methods.experimental_design_steps:
+        methods.experimental_design_steps = _extract_experimental_design_steps(
+            paper_markdown,
+            methods.experimental_design,
+            prisma_for_steps,
+        )
+    _normalize_methods_for_domain(methods, domain_profile)
     step_timings_seconds["results"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "results", "seconds": step_timings_seconds["results"]})
     _print_step_timing("results", step_timings_seconds["results"])
@@ -986,13 +1400,19 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         related_resources=getattr(data_availability, "related_resources", []),
     )
     if results.dataset_profile and results.dataset_profile.repository_contents:
-        profile_contents = results.dataset_profile.repository_contents
+        profile_contents = _normalize_file_entries(results.dataset_profile.repository_contents)
+        results.dataset_profile.repository_contents = profile_contents
         figshare_file_url = _extract_figshare_file_url(paper_markdown)
         for accession in data_availability.data_accessions:
             repo = (accession.repository or "").lower()
             if "figshare" in repo:
+                article_id, file_id = _extract_figshare_ids(accession)
                 if figshare_file_url:
                     accession.url = figshare_file_url
+                elif article_id and file_id:
+                    accession.url = f"https://figshare.com/articles/dataset/{article_id}?file={file_id}"
+                elif article_id:
+                    accession.url = f"https://doi.org/10.6084/m9.figshare.{article_id}"
                 files = list(accession.files_listed or [])
                 seen = {f.lower() for f in files}
                 for item in profile_contents:
@@ -1004,7 +1424,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
                 if any(x.lower() == "sunburst_visualization_link.md" for x in files):
                     files = [x for x in files if x.lower() != "link.md"]
                 files = [x for x in files if x.lower() != "link.md"]
-                accession.files_listed = files[:120]
+                accession.files_listed = _normalize_file_entries(files)[:120]
                 accession.file_count = max(accession.file_count or 0, len(accession.files_listed))
 
     if fast_mode:
@@ -1154,6 +1574,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     methods.organisms = _clean_placeholder_list(methods.organisms)
     methods.cell_types = _clean_placeholder_list(methods.cell_types)
     methods.assay_types = _clean_placeholder_list(methods.assay_types)
+    _normalize_methods_for_domain(methods, _infer_domain_profile(metadata.category, metadata.paper_type, paper_markdown))
     if not metadata.keywords:
         metadata.keywords = _derive_keywords(
             metadata.keywords,
@@ -1176,6 +1597,7 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     metadata.publication_status = _normalize_publication_status(metadata.publication_date) or metadata.publication_status
     if _is_blank(results.paper_type):
         results.paper_type = metadata.paper_type
+    _attach_provenance_defaults(paper_markdown, methods, results)
 
     code_repositories = _derive_code_repositories(
         paper_markdown,

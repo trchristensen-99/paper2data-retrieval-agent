@@ -102,6 +102,26 @@ def _norm_url_ocr(url: str | None) -> str | None:
     return fixed
 
 
+def _repair_url_candidates(url: str | None) -> list[str]:
+    base = (url or "").strip()
+    if not base:
+        return []
+    candidates: list[str] = []
+    variants = [
+        base,
+        _norm_url_ocr(base) or base,
+        re.sub(r"([?&])fle=([0-9]+)", r"\1file=\2", base, flags=re.IGNORECASE),
+        re.sub(r"\bfgshare\b", "figshare", base, flags=re.IGNORECASE),
+    ]
+    for item in variants:
+        clean = _norm_url_ocr(item)
+        if not clean:
+            continue
+        if clean not in candidates:
+            candidates.append(clean)
+    return candidates
+
+
 def _sanitize_reference_noise(resources: list[RelatedResource], paper_markdown: str) -> list[RelatedResource]:
     out: list[RelatedResource] = []
     main_doi_match = re.search(r"\b10\.\d{4,9}/[^\s)]+", paper_markdown, flags=re.IGNORECASE)
@@ -300,6 +320,7 @@ def _normalize_overall_status(value: str | None) -> str:
 async def _enrich_accession(accession: DataAccession) -> DataAccession:
     """Deterministically enrich repository accessions with live checks."""
     repo = _normalize_repo_name(accession)
+    original_url = accession.url
     accession.url = _norm_url_ocr(accession.url)
     accession.accession_id = _norm_url_ocr(accession.accession_id) or accession.accession_id
     identifier = accession.url or accession.accession_id
@@ -307,6 +328,18 @@ async def _enrich_accession(accession: DataAccession) -> DataAccession:
     if accession.url:
         ping = await check_url_request(accession.url)
         accession.is_accessible = bool(ping.get("is_accessible"))
+        if not accession.is_accessible:
+            for candidate in _repair_url_candidates(original_url):
+                if candidate == accession.url:
+                    continue
+                retry = await check_url_request(candidate)
+                if bool(retry.get("is_accessible")):
+                    accession.url = candidate
+                    accession.is_accessible = True
+                    accession.url_repaired = True
+                    break
+        elif accession.url != (original_url or "").strip():
+            accession.url_repaired = True
 
     if "zenodo" in repo:
         info = await check_zenodo_record_request(identifier)

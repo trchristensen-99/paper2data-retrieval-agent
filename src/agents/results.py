@@ -15,6 +15,7 @@ You must adapt extraction to paper type:
 - experimental: populate `experimental_findings` (effect sizes/comparisons first).
 - dataset_descriptor: populate `dataset_properties` (size, dimensions, coverage, temporal range, format, license if present).
   Also populate `dataset_profile` with structured fields and `tables_extracted` for key tables.
+  For `tables_extracted`, include row-level `data` objects for SQL ingestion when possible.
 - review/meta_analysis: populate `synthesized_claims` with evidence-oriented concise claims.
   If scoping review / PRISMA-like flow is present, capture those counts in `dataset_profile.prisma_flow`.
 - methods: populate `method_benchmarks` with task/metric/value/baseline/context when available.
@@ -23,6 +24,7 @@ You must adapt extraction to paper type:
 Rules:
 - No narrative interpretation or causal spin.
 - Do not fabricate p-values/CIs/effect sizes when absent.
+- Add `provenance` for quantitative extractions whenever possible (text snippet + location hint).
 - Set `paper_type` in ResultsSummary to match the routed paper type.
 """
 
@@ -78,13 +80,30 @@ def _sanitize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(tables_raw, list):
         for idx, item in enumerate(tables_raw, start=1):
             if isinstance(item, dict):
-                tables_extracted.append(item)
+                table_id = item.get("table_id") or item.get("id") or item.get("table") or item.get("table_title") or f"Table {idx}"
+                title = item.get("title") or item.get("table_title") or str(table_id)
+                columns = item.get("columns") if isinstance(item.get("columns"), list) else []
+                data = item.get("data") if isinstance(item.get("data"), list) else []
+                summary = item.get("summary") or item.get("description")
+                key_content = item.get("key_content") if isinstance(item.get("key_content"), list) else []
+                tables_extracted.append(
+                    {
+                        "table_id": str(table_id),
+                        "title": str(title) if title is not None else None,
+                        "columns": [str(x) for x in columns],
+                        "data": [x for x in data if isinstance(x, dict)],
+                        "summary": str(summary) if isinstance(summary, str) else None,
+                        "key_content": [str(x) for x in key_content if str(x).strip()],
+                        "provenance": item.get("provenance"),
+                    }
+                )
             elif isinstance(item, str) and item.strip():
                 tables_extracted.append(
                     {
                         "table_id": f"Table {idx}",
                         "title": item.strip(),
                         "columns": [],
+                        "data": [],
                         "summary": None,
                         "key_content": [],
                     }
@@ -94,7 +113,18 @@ def _sanitize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(key_figures_raw, list):
         for idx, item in enumerate(key_figures_raw, start=1):
             if isinstance(item, dict):
-                key_figures.append(item)
+                figure_id = item.get("figure_id") or item.get("id") or item.get("figure") or f"Figure {idx}"
+                description = item.get("description") or item.get("summary") or item.get("context") or ""
+                findings = item.get("key_findings")
+                if not isinstance(findings, list):
+                    findings = []
+                key_figures.append(
+                    {
+                        "figure_id": str(figure_id),
+                        "description": str(description),
+                        "key_findings": [str(x) for x in findings if str(x).strip()],
+                    }
+                )
             elif isinstance(item, str) and item.strip():
                 key_figures.append(
                     {

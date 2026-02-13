@@ -26,10 +26,13 @@ class ExperimentalFinding(BaseModel):
     p_value: Optional[str] = Field(default=None)
     effect_size: Optional[str] = Field(default=None)
     comparison: Optional[str] = Field(default=None)
+    unit: Optional[str] = Field(default=None)
+    statistical_significance: Optional[str] = Field(default=None)
     context: str = Field(description="Experimental context for this finding")
     confidence: float = Field(
         description="Agent confidence in extraction accuracy, 0-1", ge=0.0, le=1.0
     )
+    provenance: Optional["Provenance"] = None
 
 
 class Finding(ExperimentalFinding):
@@ -44,8 +47,13 @@ class FigureSummary(BaseModel):
 
 class DescriptiveStat(BaseModel):
     property: str = Field(description="Dataset/review descriptive property name")
+    variable: Optional[str] = Field(default=None)
     value: str = Field(description="Value for this descriptive property")
+    unit: Optional[str] = Field(default=None)
+    statistical_significance: Optional[str] = Field(default=None)
     context: str = Field(description="Context/notes for the property")
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    provenance: Optional["Provenance"] = None
 
 
 class MethodBenchmark(BaseModel):
@@ -140,8 +148,38 @@ class ExtractedTable(BaseModel):
     table_id: str
     title: Optional[str] = None
     columns: list[str] = []
+    data: list[dict[str, str]] = []
     summary: Optional[str] = None
     key_content: list[str] = []
+    provenance: Optional["Provenance"] = None
+
+
+class Provenance(BaseModel):
+    source_page: Optional[int] = None
+    source_section: Optional[str] = None
+    source_figure: Optional[str] = None
+    source_table: Optional[str] = None
+    line_start: Optional[int] = None
+    line_end: Optional[int] = None
+    text_segment: Optional[str] = None
+
+
+class AssayTypeMapping(BaseModel):
+    raw: str
+    mapped_term: str
+    ontology_id: Optional[str] = None
+
+
+class ExperimentalDesignStep(BaseModel):
+    step: int
+    action: str
+    tools: list[str] = []
+    criteria: Optional[str] = None
+    count: Optional[int] = None
+    excluded: Optional[int] = None
+    included: Optional[int] = None
+    context: Optional[str] = None
+    provenance: Optional[Provenance] = None
 
 
 class RelatedResource(BaseModel):
@@ -162,6 +200,7 @@ class DataAccession(BaseModel):
     description: str
     data_format: Optional[str] = None
     is_accessible: Optional[bool] = None
+    url_repaired: Optional[bool] = None
     file_count: Optional[int] = None
     files_listed: Optional[list[str]] = None
     total_size_bytes: Optional[int] = None
@@ -197,11 +236,21 @@ class MethodsSummary(BaseModel):
     sample_sizes: dict[str, Any]
     statistical_tests: list[str]
     experimental_design: str
+    experimental_design_steps: list[ExperimentalDesignStep] = []
+    assay_type_mappings: list[AssayTypeMapping] = []
     methods_completeness: str = Field(
         description="Assessment of whether methods are detailed enough to reproduce"
     )
 
-    @field_validator("organisms", "cell_types", "assay_types", "statistical_tests", mode="before")
+    @field_validator(
+        "organisms",
+        "cell_types",
+        "assay_types",
+        "statistical_tests",
+        "experimental_design_steps",
+        "assay_type_mappings",
+        mode="before",
+    )
     @classmethod
     def _none_to_list(cls, value):
         return [] if value is None else value
