@@ -42,6 +42,15 @@ def _cmd_query(args: argparse.Namespace) -> None:
         db.close()
 
 
+def _cmd_semantic_query(args: argparse.Namespace) -> None:
+    db = PaperDatabase(args.db)
+    try:
+        rows = db.semantic_search(args.q, limit=args.limit)
+        print(json.dumps(rows, indent=2))
+    finally:
+        db.close()
+
+
 def _cmd_show(args: argparse.Namespace) -> None:
     db = PaperDatabase(args.db)
     try:
@@ -66,6 +75,15 @@ def _cmd_init(args: argparse.Namespace) -> None:
     db = PaperDatabase(args.db)
     try:
         print(json.dumps(db.stats(), indent=2))
+    finally:
+        db.close()
+
+
+def _cmd_embed_index(args: argparse.Namespace) -> None:
+    db = PaperDatabase(args.db)
+    try:
+        summary = db.rebuild_embeddings(limit=args.limit)
+        print(json.dumps(summary, indent=2))
     finally:
         db.close()
 
@@ -158,12 +176,21 @@ def _build_parser() -> argparse.ArgumentParser:
     query_p.add_argument("--limit", type=int, default=20)
     query_p.set_defaults(func=lambda a: _cmd_query(a))
 
+    sem_q = sub.add_parser("semantic-query", help="Semantic embedding search")
+    sem_q.add_argument("--q", type=str, required=True, help="Semantic query text")
+    sem_q.add_argument("--limit", type=int, default=20)
+    sem_q.set_defaults(func=lambda a: _cmd_semantic_query(a))
+
     show_p = sub.add_parser("show", help="Show one paper by id")
     show_p.add_argument("--paper-id", type=str, required=True)
     show_p.set_defaults(func=lambda a: _cmd_show(a))
 
     stats_p = sub.add_parser("stats", help="Database summary")
     stats_p.set_defaults(func=lambda a: _cmd_stats(a))
+
+    emb_p = sub.add_parser("embed-index", help="Build/update embedding index for semantic search")
+    emb_p.add_argument("--limit", type=int, default=None)
+    emb_p.set_defaults(func=lambda a: _cmd_embed_index(a))
 
     review_p = sub.add_parser(
         "review-update",

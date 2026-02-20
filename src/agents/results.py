@@ -84,6 +84,19 @@ def _sanitize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 title = item.get("title") or item.get("table_title") or str(table_id)
                 columns = item.get("columns") if isinstance(item.get("columns"), list) else []
                 data = item.get("data") if isinstance(item.get("data"), list) else []
+                clean_data: list[dict[str, str]] = []
+                for row in data:
+                    if not isinstance(row, dict):
+                        continue
+                    clean_row: dict[str, str] = {}
+                    for k, v in row.items():
+                        if isinstance(v, dict):
+                            clean_row[str(k)] = json.dumps(v, ensure_ascii=True)
+                        elif v is None:
+                            clean_row[str(k)] = ""
+                        else:
+                            clean_row[str(k)] = str(v)
+                    clean_data.append(clean_row)
                 summary = item.get("summary") or item.get("description")
                 key_content = item.get("key_content") if isinstance(item.get("key_content"), list) else []
                 tables_extracted.append(
@@ -91,7 +104,7 @@ def _sanitize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
                         "table_id": str(table_id),
                         "title": str(title) if title is not None else None,
                         "columns": [str(x) for x in columns],
-                        "data": [x for x in data if isinstance(x, dict)],
+                        "data": clean_data,
                         "summary": str(summary) if isinstance(summary, str) else None,
                         "key_content": [str(x) for x in key_content if str(x).strip()],
                         "provenance": item.get("provenance"),
@@ -136,6 +149,9 @@ def _sanitize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
     paper_type = payload.get("paper_type")
     if not isinstance(paper_type, str) or not paper_type.strip():
         paper_type = None
+    findings_block = payload.get("findings")
+    if not isinstance(findings_block, dict):
+        findings_block = None
 
     return {
         "paper_type": paper_type,
@@ -146,6 +162,7 @@ def _sanitize_results_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "method_benchmarks": method_benchmarks,
         "tables_extracted": tables_extracted,
         "key_figures": key_figures,
+        "findings": findings_block,
     }
 
 
@@ -178,7 +195,7 @@ async def run_results_agent(
             "[FORMAT_FIX]\n"
             "Return JSON object with keys exactly:\n"
             "paper_type, experimental_findings, dataset_properties, synthesized_claims, "
-            "method_benchmarks, dataset_profile, tables_extracted, key_figures.\n"
+            "method_benchmarks, dataset_profile, tables_extracted, key_figures, findings.\n"
             "Values must be raw data, not schema metadata.\n"
         )
         repair_result = await run_with_rate_limit_retry(

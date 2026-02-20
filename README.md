@@ -27,6 +27,8 @@ If runs fail with `APIConnectionError` / `nodename nor servname provided`:
 - Configure proxy if required by your network:
   - `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` (standard)
   - or `P2D_HTTP_PROXY` in `.env`
+- Optional strict file-list cleanup for repository contents/file listings:
+  - `P2D_STRICT_FILE_LIST=true`
 
 ## Model Configuration
 - Default model for all agents is `gpt-5-mini`.
@@ -36,6 +38,7 @@ If runs fail with `APIConnectionError` / `nodename nor servname provided`:
   - `P2D_MODEL_METADATA`
   - `P2D_MODEL_METHODS`
   - `P2D_MODEL_RESULTS`
+  - `P2D_MODEL_ARCHETYPE`
   - `P2D_MODEL_DATA_AVAILABILITY`
   - `P2D_MODEL_QUALITY`
   - `P2D_MODEL_METADATA_ENRICHMENT`
@@ -45,11 +48,13 @@ If runs fail with `APIConnectionError` / `nodename nor servname provided`:
 
 ## Architecture
 - Manager agent orchestrates:
-  1. Metadata Agent (`gpt-5-mini` by default)
-  2. Methods Agent (`gpt-5-mini` by default)
-  3. Results Agent (`gpt-5-mini` by default)
-  4. Data Availability Agent (`gpt-5-mini` by default + tools)
-  5. Synthesis Agent (`gpt-5-mini` by default)
+  1. Anatomy Agent (structure hints)
+  2. Archetype Router Agent
+  3. Metadata Agent (`gpt-5-mini` by default)
+  4. Methods Agent (`gpt-5-mini` by default)
+  5. Results Agent (`gpt-5-mini` by default)
+  6. Data Availability Agent (`gpt-5-mini` by default + tools + fallbacks)
+  7. Synthesis Agent (`gpt-5-mini` by default)
 
 All agent interactions are logged for debugging in output retrieval logs.
 
@@ -62,6 +67,10 @@ You can ingest extraction outputs into a persistent SQLite database that support
   - `uv run python -m src.database_cli --db outputs/paper_terminal.db ingest --input outputs`
 - Search:
   - `uv run python -m src.database_cli --db outputs/paper_terminal.db query --q "wildfire figshare"`
+- Build/update semantic embedding index:
+  - `uv run python -m src.database_cli --db outputs/paper_terminal.db embed-index`
+- Semantic search (embedding-based):
+  - `uv run python -m src.database_cli --db outputs/paper_terminal.db semantic-query --q "papers about rare disease gene discovery provenance"`
 - Inspect one record:
   - `uv run python -m src.database_cli --db outputs/paper_terminal.db show --paper-id <paper_id>`
 - DB stats:

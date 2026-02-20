@@ -4,6 +4,7 @@ import pytest
 
 from src.agents import manager
 from src.agents.data_availability import _enrich_accession
+from src.agents.archetype import ArchetypeOutput
 from src.schemas.models import (
     DataAccession,
     DataAvailabilityReport,
@@ -164,6 +165,10 @@ async def test_run_pipeline_with_mocked_agents(monkeypatch: pytest.MonkeyPatch) 
         return _QC()
 
     monkeypatch.setattr(manager, "run_metadata_agent", _metadata)
+    async def _archetype(_: str) -> ArchetypeOutput:
+        return ArchetypeOutput(paper_archetype="experimental_study", confidence=0.9, rationale="test")
+
+    monkeypatch.setattr(manager, "run_archetype_agent", _archetype)
     monkeypatch.setattr(manager, "run_anatomy_agent", _anatomy)
     monkeypatch.setattr(manager, "run_methods_agent", _methods)
     monkeypatch.setattr(manager, "run_results_agent", _results)
@@ -276,6 +281,10 @@ async def test_dataset_descriptor_backfills_profile_and_code(monkeypatch: pytest
         return _QC()
 
     monkeypatch.setattr(manager, "run_metadata_agent", _metadata)
+    async def _archetype(_: str) -> ArchetypeOutput:
+        return ArchetypeOutput(paper_archetype="dataset", confidence=0.9, rationale="test")
+
+    monkeypatch.setattr(manager, "run_archetype_agent", _archetype)
     monkeypatch.setattr(manager, "run_anatomy_agent", _anatomy)
     monkeypatch.setattr(manager, "run_methods_agent", _methods)
     monkeypatch.setattr(manager, "run_results_agent", _results)

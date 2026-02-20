@@ -3,12 +3,15 @@ from __future__ import annotations
 import html
 import os
 import re
+import csv
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import perf_counter
 
 from agents import Agent
 
+from src.agents.archetype import ArchetypeOutput, archetype_agent, run_archetype_agent
 from src.agents.anatomy import anatomy_agent, run_anatomy_agent
 from src.agents.data_availability import (
     DataAvailabilityOutput,
@@ -36,11 +39,15 @@ from src.schemas.models import (
     ExperimentalDesignStep,
     ExtractedTable,
     ExperimentalFinding,
+    FindingsBlock,
     MethodTool,
+    QuantitativeDatum,
+    InterpretiveClaim,
     PrismaFlow,
     Provenance,
     PaperRecord,
     RelatedResource,
+    SampleSizeRecord,
     SynthesisInput,
     SynthesisOutput,
 )
@@ -58,6 +65,7 @@ manager_agent = Agent(
         "data_availability -> synthesis."
     ),
     handoffs=[
+        archetype_agent,
         anatomy_agent,
         metadata_agent,
         methods_agent,
@@ -550,6 +558,155 @@ def _to_number(value: str | None) -> int | float | None:
         return int(txt)
     except Exception:  # noqa: BLE001
         return None
+
+
+def _standardize_metric_key(label: str) -> tuple[str, str]:
+    low = label.strip().lower()
+    mappings = [
+        ("association", "n_associations_total", "dataset_size"),
+        ("record_count", "n_records_total", "dataset_size"),
+        ("row", "n_rows_total", "dataset_size"),
+        ("column", "n_columns_total", "dataset_size"),
+        ("paper", "n_papers_total", "provenance"),
+        ("publication", "n_publications_total", "provenance"),
+        ("pmid", "n_publications_provenance", "provenance"),
+        ("gene", "n_genes_total", "entity_count"),
+        ("disease", "n_diseases_total", "entity_count"),
+        ("sample", "n_samples_total", "sample_size"),
+    ]
+    for needle, std_key, category in mappings:
+        if needle in low:
+            return std_key, category
+    token = re.sub(r"[^a-z0-9]+", "_", low).strip("_") or "n_metric_total"
+    return token[:80], "other"
+
+
+def _derive_sample_size_records(methods, paper_markdown: str) -> None:
+    records: list[SampleSizeRecord] = []
+    seen: set[str] = set()
+    for key, raw_value in (methods.sample_sizes or {}).items():
+        label = str(key)
+        value_obj = raw_value
+        if isinstance(raw_value, dict) and "value" in raw_value:
+            value_obj = raw_value["value"]
+        value = _to_number(str(value_obj))
+        if value is None:
+            value = str(value_obj)
+        std_key, category = _standardize_metric_key(label)
+        sig = f"{std_key}::{value}"
+        if sig in seen:
+            continue
+        seen.add(sig)
+        missingness_status = "reported"
+        if isinstance(value, str) and not value.strip():
+            missingness_status = "not_reported"
+        records.append(
+            SampleSizeRecord(
+                standardized_key=std_key,
+                original_label=label,
+                value=value,
+                unit="count" if isinstance(value, (int, float)) else None,
+                category=category,
+                missingness_status=missingness_status,
+                provenance=_locate_provenance(paper_markdown, label),
+            )
+        )
+    methods.sample_size_records = records
+
+
+def _set_missingness(methods, paper_type: str | None) -> None:
+    status: dict[str, str] = {}
+    pt = (paper_type or "").strip().lower()
+    status["sample_size"] = "reported" if methods.sample_size_records else ("not_applicable" if pt in {"commentary"} else "not_reported")
+    status["statistical_tests"] = "reported" if methods.statistical_tests else ("not_applicable" if pt in {"dataset_descriptor", "commentary"} else "not_reported")
+    status["organisms"] = "reported" if methods.organisms else ("not_applicable" if pt in {"software_benchmark", "commentary"} else "not_reported")
+    status["assay_types"] = "reported" if methods.assay_types else "not_reported"
+    methods.missingness = status
+
+
+def _link_tool_entities(methods) -> None:
+    known_ids = {
+        "cytoscape": "Wikidata:Q1149474",
+        "covidence": "Wikidata:Q130427040",
+        "web of science": "Wikidata:Q11921",
+        "omim": "Wikidata:Q7089225",
+        "disgenet rdf": "Wikidata:Q122953504",
+        "jupyter": "Wikidata:Q5561638",
+        "ieee xplore": "Wikidata:Q5345586",
+        "acm digital library": "Wikidata:Q4651526",
+    }
+    for step in methods.experimental_design_steps:
+        fixed_tools: list[MethodTool] = []
+        for tool in step.tools:
+            name = (tool.name or "").strip()
+            low = name.lower()
+            entity_id = tool.entity_id
+            if not entity_id:
+                for k, v in known_ids.items():
+                    if k in low:
+                        entity_id = v
+                        break
+            fixed_tools.append(
+                MethodTool(
+                    name=name or "Unknown tool",
+                    entity_id=entity_id,
+                    version=tool.version,
+                    citation=tool.citation,
+                    software_type=tool.software_type,
+                )
+            )
+        step.tools = fixed_tools
+
+
+def _build_findings_block(results) -> None:
+    q_data: list[QuantitativeDatum] = []
+    for idx, finding in enumerate(results.experimental_findings):
+        q_data.append(
+            QuantitativeDatum(
+                entity=None,
+                measurement=finding.metric,
+                value=finding.value,
+                unit=finding.unit,
+                p_value=finding.p_value,
+                context=finding.context,
+                linked_finding_index=idx,
+                provenance=finding.provenance,
+            )
+        )
+    interpretive: list[InterpretiveClaim] = []
+    for claim in results.synthesized_claims:
+        claim_low = claim.lower()
+        support = "supported_by_data" if q_data and any(t in claim_low for t in ("increase", "decrease", "associated", "significant", "suggest")) else "unsupported_or_unclear"
+        interpretive.append(
+            InterpretiveClaim(
+                claim=claim,
+                support_status=support,
+                linked_data_id=0 if q_data else None,
+                provenance=None,
+            )
+        )
+    results.findings = FindingsBlock(quantitative_data=q_data, interpretive_claims=interpretive)
+
+
+def _export_large_tables(tables: list[ExtractedTable], *, row_threshold: int = 20) -> None:
+    export_root = os.path.join("outputs", "table_exports")
+    os.makedirs(export_root, exist_ok=True)
+    for table in tables:
+        rows = table.data or []
+        if len(rows) <= row_threshold:
+            continue
+        columns = table.columns or sorted({k for row in rows for k in row.keys()})
+        safe_id = re.sub(r"[^a-zA-Z0-9._-]+", "_", table.table_id or "table")
+        digest = hashlib.sha1((table.table_id + str(len(rows))).encode("utf-8")).hexdigest()[:10]
+        out_path = os.path.join(export_root, f"{safe_id}_{digest}.csv")
+        with open(out_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=columns)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({c: row.get(c, "") for c in columns})
+        table.storage_path = out_path
+        table.summary = (table.summary or "") + f" Exported {len(rows)} rows to {out_path}."
+        table.data = []
 
 
 def _normalize_table_topology(tables: list[ExtractedTable]) -> list[ExtractedTable]:
@@ -1588,6 +1745,28 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     log_event("pipeline.step_timing", {"step": "anatomy", "seconds": step_timings_seconds["anatomy"]})
     _print_step_timing("anatomy", step_timings_seconds["anatomy"])
 
+    step_start = perf_counter()
+    try:
+        archetype = await run_archetype_agent(paper_markdown)
+    except Exception:  # noqa: BLE001
+        inferred = _infer_paper_type("", paper_markdown)
+        archetype_map = {
+            "dataset_descriptor": "dataset",
+            "methods": "methodology",
+            "review": "review",
+            "meta_analysis": "review",
+            "experimental": "experimental_study",
+            "commentary": "commentary",
+        }
+        archetype = ArchetypeOutput(
+            paper_archetype=archetype_map.get(inferred, "experimental_study"),
+            confidence=0.5,
+            rationale="fallback heuristic",
+        )
+    step_timings_seconds["archetype"] = perf_counter() - step_start
+    log_event("pipeline.step_timing", {"step": "archetype", "seconds": step_timings_seconds["archetype"]})
+    _print_step_timing("archetype", step_timings_seconds["archetype"])
+
     anatomy_guidance = _anatomy_guidance_blob(
         anatomy.sections,
         anatomy.tables,
@@ -1617,6 +1796,8 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     )
     if _is_blank(metadata.paper_type):
         metadata.paper_type = _infer_paper_type(metadata.title, paper_markdown)
+    if _is_blank(metadata.paper_archetype):
+        metadata.paper_archetype = archetype.paper_archetype
     domain_profile = _infer_domain_profile(metadata.category, metadata.paper_type, paper_markdown)
     metadata.journal = _normalize_venue_name(metadata.journal)
     metadata.license = _normalize_license_to_spdx(metadata.license)
@@ -1678,6 +1859,11 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
     _resolve_assay_ontology_mappings(methods)
     _reclassify_dataset_counts_to_sample_sizes(methods, results)
     _partition_results_findings_vs_properties(results)
+    _derive_sample_size_records(methods, paper_markdown)
+    _set_missingness(methods, metadata.paper_archetype or metadata.paper_type)
+    _link_tool_entities(methods)
+    _build_findings_block(results)
+    _export_large_tables(results.tables_extracted)
     step_timings_seconds["results"] = perf_counter() - step_start
     log_event("pipeline.step_timing", {"step": "results", "seconds": step_timings_seconds["results"]})
     _print_step_timing("results", step_timings_seconds["results"])
@@ -1917,11 +2103,18 @@ async def run_pipeline(paper_markdown: str, fast_mode: bool = False) -> Pipeline
         metadata.keywords = ["dataset"]
     if _is_blank(metadata.paper_type):
         metadata.paper_type = _infer_paper_type(metadata.title, paper_markdown)
+    if _is_blank(metadata.paper_archetype):
+        metadata.paper_archetype = archetype.paper_archetype
     metadata.publication_status = _normalize_publication_status(metadata.publication_date) or metadata.publication_status
     if _is_blank(results.paper_type):
         results.paper_type = metadata.paper_type
     _attach_provenance_defaults(paper_markdown, methods, results)
     _partition_results_findings_vs_properties(results)
+    _derive_sample_size_records(methods, paper_markdown)
+    _set_missingness(methods, metadata.paper_archetype or metadata.paper_type)
+    _link_tool_entities(methods)
+    _build_findings_block(results)
+    _export_large_tables(results.tables_extracted)
 
     code_repositories = _derive_code_repositories(
         paper_markdown,

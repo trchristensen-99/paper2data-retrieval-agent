@@ -9,6 +9,13 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from src.database.embeddings import (
+    cosine_similarity,
+    decode_embedding_json,
+    embed_text,
+    embedding_payload_for_record,
+    encode_embedding_json,
+)
 from src.database.harmonizer import harmonize_records
 from src.schemas.models import PaperRecord
 from src.utils.taxonomy import FIELD_SUBFIELD, normalize_category_subcategory
@@ -205,6 +212,18 @@ class PaperDatabase:
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS paper_embeddings (
+                paper_id TEXT PRIMARY KEY,
+                model TEXT NOT NULL,
+                embedding_json TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(paper_id) REFERENCES papers(paper_id)
+            )
+            """
+        )
         self._ensure_column("paper_search", "assay_types", "TEXT")
         self._ensure_column("paper_search", "organisms", "TEXT")
         self._ensure_column("paper_search", "data_status", "TEXT")
@@ -336,6 +355,33 @@ class PaperDatabase:
                 (record.metadata.paper_type or record.results.paper_type or "").strip(),
                 data_check_status,
             ),
+        )
+        self._upsert_embedding_for_record(paper_id, record)
+
+    def _upsert_embedding_for_record(self, paper_id: str, record: PaperRecord) -> None:
+        payload = embedding_payload_for_record(record.model_dump())
+        payload_hash = hashlib.sha1(payload.encode("utf-8")).hexdigest()
+        existing = self.conn.execute(
+            "SELECT content_hash FROM paper_embeddings WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()
+        if existing and str(existing["content_hash"]) == payload_hash:
+            return
+        try:
+            vector = embed_text(payload)
+        except Exception:  # noqa: BLE001
+            return
+        self.conn.execute(
+            """
+            INSERT INTO paper_embeddings (paper_id, model, embedding_json, content_hash, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(paper_id) DO UPDATE SET
+                model=excluded.model,
+                embedding_json=excluded.embedding_json,
+                content_hash=excluded.content_hash,
+                updated_at=excluded.updated_at
+            """,
+            (paper_id, "text-embedding-3-small", encode_embedding_json(vector), payload_hash, _now()),
         )
 
     def _insert_version(self, paper_id: str, source_path: str | None, record: PaperRecord) -> None:
@@ -506,6 +552,72 @@ class PaperDatabase:
             (like, like, like, like, like, like, like, like, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def rebuild_embeddings(self, limit: int | None = None) -> dict[str, int]:
+        sql = "SELECT paper_id, record_json FROM papers ORDER BY updated_at DESC"
+        params: tuple[Any, ...] = ()
+        if isinstance(limit, int) and limit > 0:
+            sql += " LIMIT ?"
+            params = (limit,)
+        rows = self.conn.execute(sql, params).fetchall()
+        processed = 0
+        updated = 0
+        failed = 0
+        for row in rows:
+            processed += 1
+            paper_id = str(row["paper_id"])
+            try:
+                record = PaperRecord.model_validate(json.loads(row["record_json"]))
+            except Exception:  # noqa: BLE001
+                continue
+            before = self.conn.execute(
+                "SELECT content_hash FROM paper_embeddings WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchone()
+            self._upsert_embedding_for_record(paper_id, record)
+            after = self.conn.execute(
+                "SELECT content_hash FROM paper_embeddings WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchone()
+            if after is None:
+                failed += 1
+            elif before is None or before["content_hash"] != after["content_hash"]:
+                updated += 1
+        self.conn.commit()
+        return {"processed": processed, "updated": updated, "failed": failed}
+
+    def semantic_search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        try:
+            qvec = embed_text(query)
+        except Exception:  # noqa: BLE001
+            return []
+        rows = self.conn.execute(
+            """
+            SELECT p.paper_id, p.title, p.doi, p.pmid, p.journal, p.publication_date,
+                   ROUND(p.extraction_confidence, 2) AS extraction_confidence,
+                   e.embedding_json
+              FROM paper_embeddings e
+              JOIN papers p ON p.paper_id = e.paper_id
+            """
+        ).fetchall()
+        scored: list[dict[str, Any]] = []
+        for row in rows:
+            vec = decode_embedding_json(row["embedding_json"])
+            score = cosine_similarity(qvec, vec)
+            scored.append(
+                {
+                    "paper_id": row["paper_id"],
+                    "title": row["title"],
+                    "doi": row["doi"],
+                    "pmid": row["pmid"],
+                    "journal": row["journal"],
+                    "publication_date": row["publication_date"],
+                    "extraction_confidence": row["extraction_confidence"],
+                    "semantic_score": round(float(score), 4),
+                }
+            )
+        scored.sort(key=lambda x: x["semantic_score"], reverse=True)
+        return scored[: max(1, limit)]
 
     def list_papers(
         self,

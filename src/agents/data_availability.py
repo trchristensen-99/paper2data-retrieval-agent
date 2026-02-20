@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import httpx
 
 from pydantic import BaseModel, Field
 from agents import Agent, AgentOutputSchema, Runner
@@ -387,6 +388,39 @@ async def _enrich_accession(accession: DataAccession) -> DataAccession:
     return accession
 
 
+async def _fallback_scrape_files_from_html(url: str | None) -> list[str]:
+    if not url:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+        if resp.status_code >= 400:
+            return []
+        html = resp.text
+        candidates = re.findall(
+            r">([^<\n\r]{1,200}\.(?:csv|tsv|json|xlsx|zip|txt|fastq(?:\.gz)?|bam|vcf|parquet|md|ipynb|py))<",
+            html,
+            flags=re.IGNORECASE,
+        )
+        hrefs = re.findall(
+            r"href=[\"']([^\"']+\.(?:csv|tsv|json|xlsx|zip|txt|fastq(?:\.gz)?|bam|vcf|parquet|md|ipynb|py))[\"']",
+            html,
+            flags=re.IGNORECASE,
+        )
+        out: list[str] = []
+        seen: set[str] = set()
+        for token in candidates + hrefs:
+            clean = token.strip().split("/")[-1]
+            key = clean.lower()
+            if not clean or key in seen:
+                continue
+            seen.add(key)
+            out.append(clean)
+        return out[:200]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 async def _enrich_data_accessions(accessions: list[DataAccession]) -> list[DataAccession]:
     enriched: list[DataAccession] = []
     for accession in accessions:
@@ -557,6 +591,15 @@ async def run_data_availability_agent(
                 accession.file_count = max(accession.file_count or 0, len(accession.files_listed))
                 if accession.description and "zip" not in accession.description.lower():
                     accession.description = f"{accession.description} Repository package may contain multiple files inside zip/archive."
+    for accession in output.data_accessions:
+        if not accession.files_listed and accession.url:
+            scraped = await _fallback_scrape_files_from_html(accession.url)
+            if scraped:
+                accession.files_listed = scraped
+                accession.file_count = max(accession.file_count or 0, len(scraped))
+                output.data_availability.discrepancies.append(
+                    f"Used HTML manifest fallback for {accession.repository} accession {accession.accession_id}."
+                )
     if not output.related_resources:
         output.related_resources = _extract_related_resources_from_text(paper_markdown)
     if related_from_filtered:

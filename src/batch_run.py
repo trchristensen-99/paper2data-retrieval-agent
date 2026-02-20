@@ -146,23 +146,37 @@ async def _run_one(input_path: Path, run_root: Path, fast_mode: bool = False) ->
         )
 
 
-async def _run_batch(input_root: Path, output_root: Path, fast_mode: bool = False) -> Path:
+async def _run_batch(
+    input_root: Path,
+    output_root: Path,
+    fast_mode: bool = False,
+    concurrency: int = 3,
+) -> Path:
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     run_root = output_root / f"batch_{ts}"
     run_root.mkdir(parents=True, exist_ok=True)
 
     inputs = _find_markdown_inputs(input_root)
     summaries: list[PaperRunSummary] = []
+    sem = asyncio.Semaphore(max(1, int(concurrency)))
+    counter_lock = asyncio.Lock()
+    done = 0
 
-    for idx, path in enumerate(inputs, start=1):
-        print(f"[batch] {idx}/{len(inputs)} {path}", flush=True)
-        summary = await _run_one(path, run_root, fast_mode=fast_mode)
-        summaries.append(summary)
-        print(
-            f"[batch] done paper_id={summary.paper_id} status={summary.status} "
-            f"duration={summary.duration_seconds}",
-            flush=True,
-        )
+    async def _worker(path: Path) -> PaperRunSummary:
+        nonlocal done
+        async with sem:
+            print(f"[batch] start {path}", flush=True)
+            summary = await _run_one(path, run_root, fast_mode=fast_mode)
+            async with counter_lock:
+                done += 1
+                print(
+                    f"[batch] done {done}/{len(inputs)} paper_id={summary.paper_id} "
+                    f"status={summary.status} duration={summary.duration_seconds}",
+                    flush=True,
+                )
+            return summary
+
+    summaries = await asyncio.gather(*[_worker(p) for p in inputs])
 
     ok_runs = [s for s in summaries if s.status == "ok"]
     critical_total = len(CRITICAL_FIELDS) * len(ok_runs)
@@ -223,6 +237,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Require external service preflight checks to pass before batch execution.",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=3,
+        help="Number of papers to process concurrently.",
+    )
     return parser
 
 
@@ -248,7 +268,14 @@ def main() -> None:
         )
     if not svc_ok:
         print(f"[network] WARNING: {svc_msg}. Continuing without strict enforcement.", flush=True)
-    summary_path = asyncio.run(_run_batch(args.input_root, args.output_root, fast_mode=bool(args.fast)))
+    summary_path = asyncio.run(
+        _run_batch(
+            args.input_root,
+            args.output_root,
+            fast_mode=bool(args.fast),
+            concurrency=int(args.concurrency),
+        )
+    )
     print(f"Batch run complete: {summary_path}")
 
 

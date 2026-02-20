@@ -16,12 +16,17 @@ METHODS_PROMPT = """Extract methods details needed for statistical assessment:
 - assay_type_mappings using normalized ontology terms where possible.
   Prefer OBI/EFO/NCIT IDs when identifiable from text (do not invent IDs).
 - sample sizes
+- sample_size_records using standardized_key + original_label + value + unit + category.
 - statistical tests used
 - concise but faithful experimental design summary
 - experimental_design_steps as chronological atomic steps
   For each step, provide `tools` as objects with:
   name, version (if known), citation (if present), software_type.
 - methods completeness assessment for reproducibility
+
+Missingness rule:
+- For core fields (sample size, statistical tests, organisms), set `missingness` values:
+  reported | not_reported | not_applicable | ambiguous
 
 Do not speculate. Mark missing details explicitly in summary text.
 
@@ -153,10 +158,12 @@ def _sanitize_methods_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "cell_types": _coerce_list(payload.get("cell_types")),
         "assay_types": assay_types,
         "sample_sizes": _coerce_sample_sizes(payload.get("sample_sizes")),
+        "sample_size_records": payload.get("sample_size_records") or [],
         "statistical_tests": _coerce_list(payload.get("statistical_tests")),
         "experimental_design": _coerce_scalar(payload.get("experimental_design")),
         "experimental_design_steps": _coerce_design_steps(payload.get("experimental_design_steps")),
         "assay_type_mappings": _coerce_assay_type_mappings(payload.get("assay_type_mappings"), assay_types),
+        "missingness": payload.get("missingness") or {},
         "methods_completeness": _coerce_scalar(payload.get("methods_completeness")),
     }
 
@@ -180,8 +187,8 @@ async def run_methods_agent(paper_markdown: str, guidance: str | None = None) ->
             f"{agent_input}\n\n"
             "[FORMAT_FIX]\n"
             "Return JSON object with keys exactly:\n"
-            "organisms, cell_types, assay_types, sample_sizes, statistical_tests, "
-            "experimental_design, experimental_design_steps, assay_type_mappings, methods_completeness.\n"
+            "organisms, cell_types, assay_types, sample_sizes, sample_size_records, statistical_tests, "
+            "experimental_design, experimental_design_steps, assay_type_mappings, missingness, methods_completeness.\n"
             "Values must be raw data, not schema metadata.\n"
         )
         repair_result = await run_with_rate_limit_retry(

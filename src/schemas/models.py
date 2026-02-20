@@ -32,6 +32,7 @@ class ExperimentalFinding(BaseModel):
     confidence: float = Field(
         description="Agent confidence in extraction accuracy, 0-1", ge=0.0, le=1.0
     )
+    missingness_status: Optional[str] = Field(default=None, description="reported|not_reported|not_applicable|ambiguous")
     provenance: Optional["Provenance"] = None
 
 
@@ -149,6 +150,7 @@ class ExtractedTable(BaseModel):
     title: Optional[str] = None
     columns: list[str] = []
     data: list[dict[str, str]] = []
+    storage_path: Optional[str] = None
     summary: Optional[str] = None
     key_content: list[str] = []
     provenance: Optional["Provenance"] = None
@@ -166,6 +168,7 @@ class Provenance(BaseModel):
 
 class MethodTool(BaseModel):
     name: str
+    entity_id: Optional[str] = None
     version: Optional[str] = None
     citation: Optional[str] = None
     software_type: Optional[str] = None
@@ -282,10 +285,12 @@ class MethodsSummary(BaseModel):
     cell_types: list[str]
     assay_types: list[str]
     sample_sizes: dict[str, Any]
+    sample_size_records: list["SampleSizeRecord"] = []
     statistical_tests: list[str]
     experimental_design: str
     experimental_design_steps: list[ExperimentalDesignStep] = []
     assay_type_mappings: list[AssayTypeMapping] = []
+    missingness: dict[str, str] = {}
     methods_completeness: str = Field(
         description="Assessment of whether methods are detailed enough to reproduce"
     )
@@ -297,6 +302,7 @@ class MethodsSummary(BaseModel):
         "statistical_tests",
         "experimental_design_steps",
         "assay_type_mappings",
+        "sample_size_records",
         mode="before",
     )
     @classmethod
@@ -306,6 +312,11 @@ class MethodsSummary(BaseModel):
     @field_validator("sample_sizes", mode="before")
     @classmethod
     def _none_to_dict(cls, value):
+        return {} if value is None else value
+
+    @field_validator("missingness", mode="before")
+    @classmethod
+    def _none_to_missingness(cls, value):
         return {} if value is None else value
 
 
@@ -323,6 +334,10 @@ class MetadataRecord(BaseModel):
     paper_type: Optional[str] = Field(
         default=None,
         description="experimental|dataset_descriptor|review|methods|meta_analysis|commentary",
+    )
+    paper_archetype: Optional[str] = Field(
+        default=None,
+        description="dataset|methodology|clinical_trial|review|experimental_study|software_benchmark|commentary",
     )
     license: Optional[str] = None
     category: Optional[str] = Field(
@@ -355,6 +370,7 @@ class ResultsSummary(BaseModel):
     method_benchmarks: list[MethodBenchmark] = []
     key_figures: list[FigureSummary] = []
     tables_extracted: list[ExtractedTable] = []
+    findings: Optional["FindingsBlock"] = None
 
     @field_validator(
         "experimental_findings",
@@ -390,7 +406,41 @@ class ResultsSummary(BaseModel):
         data.setdefault("dataset_properties", [])
         data.setdefault("method_benchmarks", [])
         data.setdefault("tables_extracted", [])
+        data.setdefault("findings", None)
         return data
+
+
+class SampleSizeRecord(BaseModel):
+    standardized_key: str
+    original_label: str
+    value: float | int | str
+    unit: Optional[str] = None
+    category: Optional[str] = None
+    missingness_status: Optional[str] = Field(default=None, description="reported|not_reported|not_applicable|ambiguous")
+    provenance: Optional[Provenance] = None
+
+
+class QuantitativeDatum(BaseModel):
+    entity: Optional[str] = None
+    measurement: str
+    value: str
+    unit: Optional[str] = None
+    p_value: Optional[str] = None
+    context: Optional[str] = None
+    linked_finding_index: Optional[int] = None
+    provenance: Optional[Provenance] = None
+
+
+class InterpretiveClaim(BaseModel):
+    claim: str
+    support_status: str = "unsupported_or_unclear"
+    linked_data_id: Optional[int] = None
+    provenance: Optional[Provenance] = None
+
+
+class FindingsBlock(BaseModel):
+    quantitative_data: list[QuantitativeDatum] = []
+    interpretive_claims: list[InterpretiveClaim] = []
 
 
 class PaperRecord(BaseModel):

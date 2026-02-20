@@ -8,13 +8,14 @@ This document defines where each `PaperRecord` field is populated in the pipelin
    - HTML entity decode
    - whitespace normalization
 2. `anatomy_agent` (structure hints)
-3. `metadata_agent`
-4. `methods_agent`
-5. `results_agent`
-6. `data_availability_agent` (+ tool calls)
-7. optional `quality_control_agent` retries
-8. optional `metadata_enrichment_agent`
-9. manager deterministic post-processing
+3. `archetype_agent` (dynamic archetype router)
+4. `metadata_agent`
+5. `methods_agent`
+6. `results_agent`
+7. `data_availability_agent` (+ tool calls)
+8. optional `quality_control_agent` retries
+9. optional `metadata_enrichment_agent`
+10. manager deterministic post-processing
    - URL normalization/canonicalization
    - table topology normalization + de-duplication
    - dataset/profile backfills
@@ -26,8 +27,8 @@ This document defines where each `PaperRecord` field is populated in the pipelin
    - exact-substring provenance normalization
    - code/resource classification
    - file-list normalization
-10. `synthesis_agent` (report/log generation)
-11. manager canonical overwrite + confidence scoring
+11. `synthesis_agent` (report/log generation)
+12. manager canonical overwrite + confidence scoring
 
 ## Field Ownership (First Writer -> Overrides)
 
@@ -43,6 +44,7 @@ This document defines where each `PaperRecord` field is populated in the pipelin
     - license normalization (`CC-BY-4.0`, `CC0-1.0` when detectable)
     - keyword cleanup/repair
     - paper type fallback inference
+    - archetype fallback from `archetype_agent`
     - placeholder stripping
 
 ### `methods.*`
@@ -55,6 +57,9 @@ This document defines where each `PaperRecord` field is populated in the pipelin
     - domain-profile normalization (bio vs meta-research vs computational)
     - `experimental_design_steps` atomization (chronological, count-aware steps)
     - `assay_type_mappings` ontology-style normalization (`raw`, `mapped_term`, `ontology_id`, `vocabulary`)
+    - `sample_size_records` normalization (`standardized_key`, `original_label`, `value`, `unit`, `category`)
+    - `missingness` statuses (`reported|not_reported|not_applicable|ambiguous`)
+    - tool entity linking (`MethodTool.entity_id`)
     - hard coercion of malformed model outputs (string steps -> structured step objects)
 
 ### `results.*`
@@ -80,8 +85,14 @@ This document defines where each `PaperRecord` field is populated in the pipelin
       - static artifact descriptors (rows, columns, bytes, file/record counts, version/license/format) stay in `dataset_properties`
       - scientific outcome statements (percentages, p-values, effect-style results) stay in `experimental_findings`
       - dedupe pass removes duplicate metric/value pairs across both collections
+    - `findings` block synthesis:
+      - `quantitative_data`
+      - `interpretive_claims` with linkage
     - reclassification of resource/input counts into `methods.sample_sizes`
     - per-item provenance defaults for findings/properties/tables
+    - table triage:
+      - small tables stay inline
+      - large tables are exported to CSV and referenced via `tables_extracted[*].storage_path`
 
 ### `data_accessions[*]`
 
@@ -98,6 +109,10 @@ This document defines where each `PaperRecord` field is populated in the pipelin
     - `system` (`DOI`, `GEO`, `SRA`, `OTHER`)
     - `normalized_id` (e.g., `doi:...`, `geo:GSE...`, `sra:SRR...`)
     - `repository_type` (`generalist`, `domain_specific`, `other`)
+  - resilience fallback chain:
+    - repository API
+    - HTML manifest scraping
+    - paper-text file mention extraction
 
 ### `data_assets[*]`
 
